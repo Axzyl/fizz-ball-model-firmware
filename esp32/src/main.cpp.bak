@@ -1,0 +1,69 @@
+#include <Arduino.h>
+
+#define LED_PIN 9
+#define SERVO_PIN 8
+
+// PWM settings for servo
+#define PWM_FREQ 50
+#define PWM_CHANNEL 0
+#define PWM_RESOLUTION 16
+
+char buffer[32];
+uint8_t bufIndex = 0;
+
+void setServoAngle(int angle)
+{
+    // MG996R: 500-2500us pulse width for 0-180 degrees
+    // At 50Hz, period = 20000us
+    // 16-bit resolution = 65535 ticks per period
+    // 500us = 1638 ticks, 2500us = 8192 ticks
+
+    int pulseWidth = map(angle, 0, 180, 1638, 8192);
+    ledcWrite(PWM_CHANNEL, pulseWidth);
+}
+
+void setup()
+{
+    Serial.begin(115200);
+
+    pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, LOW);
+
+    // Setup PWM for servo
+    ledcSetup(PWM_CHANNEL, PWM_FREQ, PWM_RESOLUTION);
+    ledcAttachPin(SERVO_PIN, PWM_CHANNEL);
+
+    setServoAngle(90);  // Center position
+
+    Serial.println("Ready");
+}
+
+void loop()
+{
+    while (Serial.available())
+    {
+        char c = Serial.read();
+
+        if (c == '\n')
+        {
+            buffer[bufIndex] = '\0';
+            int angle = atoi(buffer);
+
+            if (angle >= 0 && angle <= 180)
+            {
+                setServoAngle(angle);
+                Serial.printf("Servo: %d\n", angle);
+
+                digitalWrite(LED_PIN, HIGH);
+                delay(100);
+                digitalWrite(LED_PIN, LOW);
+            }
+
+            bufIndex = 0;
+        }
+        else if (bufIndex < sizeof(buffer) - 1)
+        {
+            buffer[bufIndex++] = c;
+        }
+    }
+}
