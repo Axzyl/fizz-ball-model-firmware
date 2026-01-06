@@ -58,6 +58,10 @@ class Dashboard:
         self.frame_times: list[float] = []
         self.fps = 0.0
 
+        # Mouse tracking for hover effects
+        self.mouse_x = 0
+        self.mouse_y = 0
+
     def run(self) -> None:
         """
         Run the dashboard main loop.
@@ -66,9 +70,11 @@ class Dashboard:
         """
         logger.info("Dashboard starting...")
 
-        # Create window
-        cv2.namedWindow(self.WINDOW_NAME, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(self.WINDOW_NAME, config.DASHBOARD_WIDTH, config.DASHBOARD_HEIGHT)
+        # Create window (WINDOW_AUTOSIZE prevents resize scaling issues)
+        cv2.namedWindow(self.WINDOW_NAME, cv2.WINDOW_AUTOSIZE)
+
+        # Set up mouse callback for clicks and hover
+        cv2.setMouseCallback(self.WINDOW_NAME, self._on_mouse_event)
 
         target_frame_time = 1.0 / config.DASHBOARD_FPS
         last_frame_time = time.time()
@@ -81,9 +87,16 @@ class Dashboard:
             # Get current state
             frame, face, esp, command, system = self.state.get_all()
 
+            # Calculate hover position relative to telemetry panel
+            hover_x = self.mouse_x - config.VIDEO_PANEL_WIDTH
+            hover_y = self.mouse_y
+
             # Render panels
             video_img = self.video_panel.render(frame, face)
-            telemetry_img = self.telemetry_panel.render(face, esp, command, system)
+            telemetry_img = self.telemetry_panel.render(
+                face, esp, command, system,
+                hover_pos=(hover_x, hover_y) if hover_x >= 0 else None
+            )
 
             # Compose dashboard
             dashboard = self._compose(video_img, telemetry_img)
@@ -204,3 +217,42 @@ class Dashboard:
             self.fps = len(self.frame_times) / (
                 self.frame_times[-1] - self.frame_times[0]
             )
+
+    def _on_mouse_event(self, event: int, x: int, y: int, flags: int, param) -> None:
+        """
+        Handle mouse events for button interaction and hover effects.
+
+        Args:
+            event: OpenCV mouse event type
+            x: X coordinate
+            y: Y coordinate
+            flags: Additional flags
+            param: User data (unused)
+        """
+        # Always track mouse position for hover effects
+        self.mouse_x = x
+        self.mouse_y = y
+
+        # Handle clicks
+        if event == cv2.EVENT_LBUTTONDOWN:
+            # Check if click is in telemetry panel area
+            if x >= config.VIDEO_PANEL_WIDTH:
+                # Convert to telemetry panel coordinates
+                panel_x = x - config.VIDEO_PANEL_WIDTH
+                panel_y = y
+
+                # Check if a button was clicked
+                button_name = self.telemetry_panel.get_button_at(panel_x, panel_y)
+                if button_name:
+                    self._handle_button_click(button_name)
+
+    def _handle_button_click(self, button_name: str) -> None:
+        """
+        Handle a button click action.
+
+        Args:
+            button_name: Name of the clicked button
+        """
+        if button_name == "led_test":
+            logger.info("LED test triggered")
+            self.state.trigger_led_test()

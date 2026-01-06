@@ -200,6 +200,9 @@ class UartComm(threading.Thread):
                 timeout=config.UART_TIMEOUT,
                 write_timeout=config.UART_TIMEOUT,
             )
+            # Disable DTR/RTS to prevent ESP32 reset on connection
+            self.serial.dtr = False
+            self.serial.rts = False
             self.protocol.reset()
             return True
 
@@ -254,11 +257,12 @@ class UartComm(threading.Thread):
                         servo_pos=packet.servo_position,
                         light_state=packet.light_state,
                         flags=packet.flags,
+                        test_active=packet.test_active,
                     )
                     self.state.increment_uart_rx()
                     logger.debug(
                         f"RX: limit={packet.limit}, servo={packet.servo_position}, "
-                        f"light={packet.light_state}"
+                        f"light={packet.light_state}, test={packet.test_active}"
                     )
 
         except Exception as e:

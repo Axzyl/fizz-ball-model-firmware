@@ -129,11 +129,11 @@ class FaceTrackerThread(threading.Thread):
                     is_facing=result["is_facing"],
                     confidence=result["confidence"],
                 )
-
-                # Update servo target based on face position
-                self._update_servo_target(result)
             else:
                 self.state.clear_face()
+
+            # Update servo target based on face detection and facing status
+            self._update_servo_target(result)
 
             # Update FPS
             self.fps_counter += 1
@@ -147,39 +147,16 @@ class FaceTrackerThread(threading.Thread):
         logger.info("Face tracker thread stopped")
 
     def _update_servo_target(self, result: dict) -> None:
-        """Calculate and update servo target based on face position."""
-        if result["bbox"] is None:
-            return
+        """Update servo target based on face detection and facing status.
 
-        x, y, w, h = result["bbox"]
-        face_center_x = x + w / 2
-
-        # Calculate offset from frame center
-        frame_center_x = config.CAMERA_WIDTH / 2
-        offset = (face_center_x - frame_center_x) / frame_center_x  # -1 to 1
-
-        # Apply deadzone
-        if abs(offset) < config.SERVO_DEADZONE / 90.0:
-            return
-
-        # Calculate target angle
-        current_target = self.state.get_command().servo_target
-        adjustment = offset * config.SERVO_TRACKING_GAIN * 10  # Scale factor
-
-        new_target = current_target - adjustment  # Negative because camera is mirrored
-        new_target = max(
-            config.SERVO_MIN_ANGLE, min(config.SERVO_MAX_ANGLE, new_target)
-        )
-
-        # Check limit switch before updating
-        esp_state = self.state.get_esp()
-        if esp_state.limit_triggered:
-            if esp_state.limit_direction == 1 and new_target > current_target:
-                return  # Don't move further CW if CW limit hit
-            if esp_state.limit_direction == 2 and new_target < current_target:
-                return  # Don't move further CCW if CCW limit hit
-
-        self.state.set_command(servo_target=new_target)
+        Simple logic:
+        - Face detected AND facing forward -> servo at 180°
+        - Otherwise -> servo at 0°
+        """
+        if result["detected"] and result["is_facing"]:
+            self.state.set_command(servo_target=180.0)
+        else:
+            self.state.set_command(servo_target=0.0)
 
 
 class Application:

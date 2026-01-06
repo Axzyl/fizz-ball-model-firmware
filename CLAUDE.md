@@ -96,6 +96,17 @@ Pi GND ─────────────── ESP32 GND
 - Servo PWM: GPIO 18
 - Light output: GPIO 19
 - Limit switch input: GPIO 21
+- Built-in LED: GPIO 2 (for testing)
+
+## Command Flags
+
+The protocol supports command flags for special operations (bit field in flags byte):
+
+| Bit | Name | Description |
+|-----|------|-------------|
+| 0 | `CMD_FLAG_LED_TEST` | Trigger LED blink test (5 blinks) |
+
+Flags are set by Pi, transmitted via UART, and cleared by ESP32 after processing.
 
 ## Dashboard UI
 
@@ -114,8 +125,19 @@ OpenCV-based dashboard with two panels:
 │                             │                       │
 │                             │  SYSTEM               │
 │                             │  FPS, UART status     │
+│                             │                       │
+│                             │  TEST                 │
+│                             │  [LED Blink Test]     │
 └─────────────────────────────┴───────────────────────┘
 ```
+
+### Dashboard Controls
+- **Keyboard:**
+  - `Q` / `ESC`: Quit application
+  - `R`: Reset servo to center (90°)
+  - `L`: Cycle light mode (OFF → ON → AUTO)
+- **Mouse:**
+  - Click "LED Blink Test" button: Triggers 5 blinks on ESP32 built-in LED
 
 ## Key Algorithms
 

@@ -1,12 +1,15 @@
 #include "uart_handler.h"
 #include "config.h"
 
-// UART instance for Pi communication
-HardwareSerial PiSerial(1);  // UART1
+// Use USB Serial for protocol communication
+#define PiSerial Serial
 
 // Receive buffer
 static char rx_buffer[UART_RX_BUFFER_SIZE];
 static size_t rx_index = 0;
+
+// External function to notify command received (defined in main.cpp)
+extern void on_command_received();
 
 /**
  * Parse a command packet.
@@ -42,20 +45,19 @@ static bool parse_command_packet(const char* buffer, DeviceState* state) {
     // Update state
     state_update_command(state, servo_target, (uint8_t)light_cmd, (uint8_t)flags);
 
+    // Notify that we received a command (enables status responses)
+    on_command_received();
+
     DEBUG_PRINTF("CMD: servo=%.1f, light=%d, flags=%d\n", servo_target, light_cmd, flags);
 
     return true;
 }
 
 void uart_init() {
-    // Initialize UART1 for Pi communication
-    PiSerial.begin(UART_BAUD_RATE, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
-
+    // USB Serial is already initialized in setup()
     // Clear buffers
     rx_index = 0;
     memset(rx_buffer, 0, sizeof(rx_buffer));
-
-    DEBUG_PRINTLN("UART initialized");
 }
 
 void uart_receive(DeviceState* state) {
@@ -91,22 +93,26 @@ void uart_receive(DeviceState* state) {
     }
 }
 
+// External function to check test status (defined in main.cpp)
+extern bool is_test_active();
+
 void uart_send_status(DeviceState* state) {
     // Build status packet
-    // Format: $STS,<limit>,<servo_pos>,<light_state>,<flags>\n
+    // Format: $STS,<limit>,<servo_pos>,<light_state>,<flags>,<test>\n
 
     uint8_t limit = state->input.limit_direction;
     float servo_pos = state->output.servo_angle;
     uint8_t light_state = state->output.light_on ? 1 : 0;
     uint8_t flags = 0;
+    uint8_t test_active = is_test_active() ? 1 : 0;
 
     // Set flags
     if (state->output.servo_moving) {
         flags |= 0x01;  // Bit 0: servo moving
     }
 
-    // Send packet
-    PiSerial.printf("$STS,%d,%.1f,%d,%d\n", limit, servo_pos, light_state, flags);
+    // Send packet with test indicator
+    PiSerial.printf("$STS,%d,%.1f,%d,%d,%d\n", limit, servo_pos, light_state, flags, test_active);
 
-    DEBUG_PRINTF("STS: limit=%d, servo=%.1f, light=%d\n", limit, servo_pos, light_state);
+    DEBUG_PRINTF("STS: limit=%d, servo=%.1f, light=%d, test=%d\n", limit, servo_pos, light_state, test_active);
 }

@@ -6,17 +6,21 @@
 // =============================================================================
 
 // UART pins (communicating with Raspberry Pi)
-#define UART_RX_PIN         16
-#define UART_TX_PIN         17
+// Note: GPIO 16/17 conflict with PSRAM on some boards, using 25/26 instead
+#define UART_RX_PIN         25
+#define UART_TX_PIN         26
 
 // Servo control
-#define SERVO_PIN           18
+#define SERVO_PIN           8
 
 // Light control
 #define LIGHT_PIN           19
 
 // Limit switch (active LOW with internal pullup)
 #define LIMIT_SWITCH_PIN    21
+
+// Test LED pin
+#define TEST_LED_PIN        9
 
 // =============================================================================
 // UART Settings
@@ -89,6 +93,15 @@
 #define PACKET_START_MARKER '$'
 #define PACKET_END_MARKER   '\n'
 #define PACKET_MAX_SIZE     64
+
+// Command flags (from Pi)
+#define CMD_FLAG_LED_TEST   0x01    // Bit 0: Trigger LED blink test
+
+// =============================================================================
+// Test Settings
+// =============================================================================
+
+#define TEST_LED_DURATION_MS    500  // LED on for 0.5 seconds
 
 // =============================================================================
 // Debug Settings

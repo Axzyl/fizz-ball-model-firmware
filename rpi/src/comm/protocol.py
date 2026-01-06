@@ -31,6 +31,7 @@ class StatusPacket:
     servo_position: float
     light_state: int
     flags: int
+    test_active: int = 0  # 1 when test was triggered, stays high for 1 second
 
     @classmethod
     def decode(cls, data: bytes) -> Optional["StatusPacket"]:
@@ -56,15 +57,19 @@ class StatusPacket:
             content = line[5:]  # Remove "$STS,"
             fields = content.split(",")
 
-            if len(fields) != 4:
+            if len(fields) < 4 or len(fields) > 5:
                 logger.debug(f"Invalid field count: {len(fields)}")
                 return None
+
+            # Parse test_active if present (backwards compatible)
+            test_active = int(fields[4]) if len(fields) >= 5 else 0
 
             return cls(
                 limit=int(fields[0]),
                 servo_position=float(fields[1]),
                 light_state=int(fields[2]),
                 flags=int(fields[3]),
+                test_active=test_active,
             )
 
         except (ValueError, UnicodeDecodeError) as e:

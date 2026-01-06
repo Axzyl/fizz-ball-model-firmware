@@ -1,12 +1,39 @@
 # Project Status
 
-## Current Phase: MediaPipe Tasks API Migration
+## Current Phase: LED Test Feature
 
 **Last Updated:** 2026-01-05
 
 ---
 
 ## Version History
+
+### v0.1.3 - LED Blink Test Feature (2026-01-05)
+
+**Status:** Complete
+
+#### Changes
+- Added LED blink test button to dashboard UI
+- Implemented command flag system for special operations
+- ESP32 runs non-blocking LED test state machine
+- Clicking "LED Blink Test" button triggers 5 blinks on ESP32 built-in LED
+- Verifies end-to-end UART communication
+
+#### Files Modified
+- `esp32/include/config.h` - Added `BUILTIN_LED_PIN`, `CMD_FLAG_LED_TEST`, blink timing constants
+- `esp32/src/main.cpp` - Added LED init, `check_led_test()`, `run_led_test()` state machine
+- `rpi/src/config.py` - Added `CMD_FLAG_LED_TEST` constant
+- `rpi/src/state.py` - Added `set_command_flag()`, `clear_command_flag()`, `trigger_led_test()` methods
+- `rpi/src/dashboard/telemetry_panel.py` - Added `ButtonInfo` dataclass, button rendering, click detection
+- `rpi/src/dashboard/dashboard.py` - Added mouse callback, button click handling
+
+#### Technical Details
+- Command flags are transmitted in the UART protocol's flags field
+- ESP32 clears the flag after receiving to prevent re-triggering
+- Non-blocking state machine allows normal operation during test
+- Button click detection uses coordinate transformation from dashboard to panel space
+
+---
 
 ### v0.1.2 - MediaPipe Tasks API Migration (2026-01-05)
 

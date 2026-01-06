@@ -61,6 +61,7 @@ class EspState:
     servo_position: float = 90.0
     light_state: bool = False
     flags: int = 0
+    test_active: bool = False  # True when test was triggered on ESP32
     last_rx_time: float = 0.0
 
     def update_from_packet(
@@ -69,6 +70,7 @@ class EspState:
         servo_pos: float,
         light_state: int,
         flags: int,
+        test_active: int = 0,
     ) -> None:
         """Update state from received packet."""
         self.connected = True
@@ -77,6 +79,7 @@ class EspState:
         self.servo_position = servo_pos
         self.light_state = light_state == 1
         self.flags = flags
+        self.test_active = test_active == 1
         self.last_rx_time = time.time()
 
     def check_connection(self, timeout_ms: float) -> None:
@@ -216,10 +219,11 @@ class AppState:
         servo_pos: float,
         light_state: int,
         flags: int,
+        test_active: int = 0,
     ) -> None:
         """Thread-safe ESP state update from received packet."""
         with self._lock:
-            self._esp.update_from_packet(limit, servo_pos, light_state, flags)
+            self._esp.update_from_packet(limit, servo_pos, light_state, flags, test_active)
 
     def get_esp(self) -> EspState:
         """Thread-safe ESP state retrieval (returns copy)."""
@@ -231,6 +235,7 @@ class AppState:
                 servo_position=self._esp.servo_position,
                 light_state=self._esp.light_state,
                 flags=self._esp.flags,
+                test_active=self._esp.test_active,
                 last_rx_time=self._esp.last_rx_time,
             )
 
@@ -266,6 +271,21 @@ class AppState:
                 light_command=self._command.light_command,
                 flags=self._command.flags,
             )
+
+    def set_command_flag(self, flag: int) -> None:
+        """Thread-safe set a command flag bit."""
+        with self._lock:
+            self._command.flags |= flag
+
+    def clear_command_flag(self, flag: int) -> None:
+        """Thread-safe clear a command flag bit."""
+        with self._lock:
+            self._command.flags &= ~flag
+
+    def trigger_led_test(self) -> None:
+        """Trigger the LED blink test on ESP32."""
+        import config
+        self.set_command_flag(config.CMD_FLAG_LED_TEST)
 
     # -------------------------------------------------------------------------
     # System State Access
@@ -350,6 +370,7 @@ class AppState:
                 servo_position=self._esp.servo_position,
                 light_state=self._esp.light_state,
                 flags=self._esp.flags,
+                test_active=self._esp.test_active,
                 last_rx_time=self._esp.last_rx_time,
             )
 

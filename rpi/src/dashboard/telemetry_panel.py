@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Optional, Tuple
+
 import cv2
 import numpy as np
 
@@ -9,6 +12,21 @@ import sys
 sys.path.append("..")
 import config
 from state import FaceState, EspState, CommandState, SystemState
+
+
+@dataclass
+class ButtonInfo:
+    """Information about a clickable button."""
+    x: int
+    y: int
+    width: int
+    height: int
+    name: str
+
+    def contains(self, x: int, y: int) -> bool:
+        """Check if a point is inside this button."""
+        return (self.x <= x <= self.x + self.width and
+                self.y <= y <= self.y + self.height)
 
 
 class TelemetryPanel:
@@ -20,6 +38,7 @@ class TelemetryPanel:
     - ESP32 state (servo position, limit switch, lights)
     - Command state (servo target, light command)
     - System state (FPS, UART status, uptime)
+    - Test buttons
     """
 
     # Panel layout
@@ -27,6 +46,13 @@ class TelemetryPanel:
     LINE_HEIGHT = 20
     MARGIN = 15
     LABEL_WIDTH = 140
+
+    # Button layout
+    BUTTON_HEIGHT = 28
+    BUTTON_WIDTH = 120
+    BUTTON_COLOR = (80, 80, 80)
+    BUTTON_HOVER_COLOR = (100, 100, 100)
+    BUTTON_TEXT_COLOR = (255, 255, 255)
 
     def __init__(self, width: int, height: int) -> None:
         """
@@ -38,6 +64,8 @@ class TelemetryPanel:
         """
         self.width = width
         self.height = height
+        self.buttons: list[ButtonInfo] = []
+        self.hovered_button: Optional[str] = None
 
     def render(
         self,
@@ -45,6 +73,7 @@ class TelemetryPanel:
         esp: EspState,
         command: CommandState,
         system: SystemState,
+        hover_pos: Optional[Tuple[int, int]] = None,
     ) -> np.ndarray:
         """
         Render telemetry panel with current state values.
@@ -54,10 +83,22 @@ class TelemetryPanel:
             esp: Current ESP32 state
             command: Current command state
             system: Current system state
+            hover_pos: Mouse position relative to panel (x, y), or None
 
         Returns:
             Rendered panel as BGR image
         """
+        # Determine which button is hovered (using previous frame's buttons)
+        self.hovered_button = None
+        if hover_pos:
+            hx, hy = hover_pos
+            button_name = self.get_button_at(hx, hy)
+            if button_name:
+                self.hovered_button = button_name
+
+        # Clear button list for this frame (after hover check)
+        self.buttons = []
+
         # Create panel with background
         panel = np.zeros((self.height, self.width, 3), dtype=np.uint8)
         panel[:] = config.COLOR_PANEL_BG
@@ -114,10 +155,35 @@ class TelemetryPanel:
         uptime_str = self._format_uptime(system.uptime)
         y = self._draw_value(panel, "Uptime", uptime_str, y)
 
+        y += self.SECTION_SPACING // 2
+
+        # Test section with buttons
+        y = self._draw_section_header(panel, "TEST", y)
+        y = self._draw_value(panel, "Response", "OK" if esp.test_active else "-", y,
+                             config.COLOR_FACING_YES if esp.test_active else (128, 128, 128))
+        y = self._draw_button(panel, "LED Test", "led_test", y)
+
         # Draw servo position indicator bar
         self._draw_servo_bar(panel, command.servo_target, esp.servo_position)
 
         return panel
+
+    def get_button_at(self, x: int, y: int) -> Optional[str]:
+        """
+        Check if a point is inside any button.
+
+        Args:
+            x: X coordinate (relative to panel)
+            y: Y coordinate (relative to panel)
+
+        Returns:
+            Button name if clicked, None otherwise
+        """
+        for button in self.buttons:
+            if (button.x <= x <= button.x + button.width and
+                button.y <= y <= button.y + button.height):
+                return button.name
+        return None
 
     def _draw_section_header(
         self,
@@ -179,6 +245,67 @@ class TelemetryPanel:
         )
 
         return y + self.LINE_HEIGHT
+
+    def _draw_button(
+        self,
+        panel: np.ndarray,
+        label: str,
+        name: str,
+        y: int,
+    ) -> int:
+        """Draw a clickable button and return new y position."""
+        button_x = self.MARGIN + 10
+        button_y = y
+
+        # Check if this button is hovered
+        is_hovered = (self.hovered_button == name)
+
+        # Choose colors based on hover state
+        bg_color = self.BUTTON_HOVER_COLOR if is_hovered else self.BUTTON_COLOR
+        border_color = (180, 180, 180) if is_hovered else (120, 120, 120)
+
+        # Draw button background
+        cv2.rectangle(
+            panel,
+            (button_x, button_y),
+            (button_x + self.BUTTON_WIDTH, button_y + self.BUTTON_HEIGHT),
+            bg_color,
+            -1,
+        )
+
+        # Draw button border
+        cv2.rectangle(
+            panel,
+            (button_x, button_y),
+            (button_x + self.BUTTON_WIDTH, button_y + self.BUTTON_HEIGHT),
+            border_color,
+            2 if is_hovered else 1,
+        )
+
+        # Draw button text (centered)
+        text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)[0]
+        text_x = button_x + (self.BUTTON_WIDTH - text_size[0]) // 2
+        text_y = button_y + (self.BUTTON_HEIGHT + text_size[1]) // 2
+        cv2.putText(
+            panel,
+            label,
+            (text_x, text_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            self.BUTTON_TEXT_COLOR,
+            1,
+        )
+
+        # Store button info for click detection
+        self.buttons.append(ButtonInfo(
+            x=button_x,
+            y=button_y,
+            width=self.BUTTON_WIDTH,
+            height=self.BUTTON_HEIGHT,
+            name=name,
+        ))
+
+        return y + self.BUTTON_HEIGHT + 10
 
     def _draw_servo_bar(
         self,
