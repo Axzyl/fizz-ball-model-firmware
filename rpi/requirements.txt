@@ -1,0 +1,14 @@
+# Face Tracking System - Raspberry Pi Dependencies
+
+# Computer Vision
+opencv-python>=4.8.0
+mediapipe>=0.10.0
+
+# Serial Communication
+pyserial>=3.5
+
+# Numerical Computing
+numpy>=1.24.0
+
+# Type hints (development)
+typing-extensions>=4.0.0

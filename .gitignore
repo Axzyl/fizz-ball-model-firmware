@@ -205,3 +205,30 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# =============================================================================
+# Project Specific
+# =============================================================================
+
+# Local config (machine-specific settings)
+rpi/src/local_config.py
+
+# MediaPipe model files (downloaded automatically)
+rpi/src/models/
+*.tflite
+*.task
+
+# =============================================================================
+# PlatformIO (ESP32)
+# =============================================================================
+esp32/.pio/
+esp32/.pioenvs/
+esp32/.piolibdeps/
+esp32/.clang_complete
+esp32/.gcc-flags.json
+
+# =============================================================================
+# OS Generated
+# =============================================================================
+.DS_Store
+Thumbs.db
