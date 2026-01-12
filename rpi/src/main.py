@@ -147,16 +147,29 @@ class FaceTrackerThread(threading.Thread):
         logger.info("Face tracker thread stopped")
 
     def _update_servo_target(self, result: dict) -> None:
-        """Update servo target based on face detection and facing status.
+        """Update servo targets based on face detection and limit switch.
 
-        Simple logic:
-        - Face detected AND facing forward -> servo at 180°
-        - Otherwise -> servo at 0°
+        Servo 1 (pin 8): Controlled by limit switch
+        - Limit switch pressed -> 150°
+        - Limit switch not pressed -> 40°
+
+        Servos 2 & 3: Controlled by face detection
+        - Face detected AND facing forward -> 180°
+        - Otherwise -> 0°
         """
+        # Get limit switch state for servo 1
+        esp_state = self.state.get_esp()
+        servo1_target = 150.0 if esp_state.limit_triggered else 40.0
+
+        # Servos 2 & 3 based on face detection
         if result["detected"] and result["is_facing"]:
-            self.state.set_command(servo_target=180.0)
+            servo2_target = 180.0
+            servo3_target = 180.0
         else:
-            self.state.set_command(servo_target=0.0)
+            servo2_target = 0.0
+            servo3_target = 0.0
+
+        self.state.set_command(servo_targets=(servo1_target, servo2_target, servo3_target))
 
 
 class Application:

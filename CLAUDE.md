@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-A face-tracking camera platform using a Raspberry Pi and ESP32. The system uses computer vision to track a person's face and rotate a servo-mounted camera platform to keep the subject centered. Lights activate when the subject is facing the camera.
+A face-tracking animatronic platform using a Raspberry Pi and ESP32. The system uses computer vision to track a person's face and control multiple servos, RGB lighting, and LED matrix displays. All outputs activate when the subject is detected facing the camera.
 
 ## Architecture
 
@@ -11,10 +11,10 @@ A face-tracking camera platform using a Raspberry Pi and ESP32. The system uses 
 ```
 ┌─────────────────────┐         UART          ┌─────────────────────┐
 │    Raspberry Pi     │◄─────────────────────►│       ESP32         │
-│  - Face detection   │                       │  - Servo control    │
-│  - Pose estimation  │                       │  - Light control    │
-│  - Dashboard UI     │                       │  - Limit switch     │
-│  - Command logic    │                       │  - Hardware I/O     │
+│  - Face detection   │      (USB Serial)     │  - 3x Servo control │
+│  - Pose estimation  │                       │  - RGB LED strip    │
+│  - Dashboard UI     │                       │  - LED matrix (2x)  │
+│  - Command logic    │                       │  - Limit switch     │
 └─────────────────────┘                       └─────────────────────┘
 ```
 
@@ -25,8 +25,9 @@ rpi/src/
 ├── main.py                 # Entry point, thread orchestration
 ├── state.py                # Thread-safe centralized state
 ├── config.py               # Configuration constants
+├── local_config.py         # Machine-specific overrides (gitignored)
 ├── vision/
-│   └── face_tracker.py     # MediaPipe face detection + angle calculation
+│   └── face_tracker.py     # YOLO + MediaPipe hybrid face detection
 ├── comm/
 │   ├── uart_comm.py        # Bidirectional UART communication
 │   └── protocol.py         # Packet encoding/decoding
@@ -41,14 +42,16 @@ rpi/src/
 ```
 esp32/
 ├── src/
-│   ├── main.cpp            # Setup/loop
+│   ├── main.cpp            # Setup/loop, servo updates
 │   ├── state.cpp/.h        # Centralized device state
 │   ├── uart_handler.cpp/.h # UART packet handling
-│   ├── servo_controller.cpp/.h
-│   ├── light_controller.cpp/.h
-│   └── limit_switch.cpp/.h
+│   ├── servo_controller.cpp/.h  # Multi-servo PWM control
+│   ├── rgb_strip.cpp/.h    # RGB LED strip control
+│   ├── led_matrix.cpp/.h   # MAX7219 LED matrix control
+│   └── limit_switch.cpp/.h # Limit switch input
 ├── include/
-│   └── config.h            # Pin definitions, constants
+│   ├── config.h            # Configuration constants
+│   └── pins.h              # Hardware pin definitions
 └── platformio.ini
 ```
 
@@ -57,8 +60,8 @@ esp32/
 | Thread | Responsibility | Update Rate |
 |--------|----------------|-------------|
 | Camera | Frame capture | 30-60 fps |
-| FaceTracker | MediaPipe processing, angle calculation | ~30 fps |
-| UartComm | Bidirectional UART TX/RX | 50-100 Hz |
+| FaceTracker | YOLO + MediaPipe processing | ~30 fps |
+| UartComm | Bidirectional UART TX/RX | 30 Hz |
 | Main (Dashboard) | UI rendering, user interaction | ~30 fps |
 
 ## State Management
@@ -66,47 +69,91 @@ esp32/
 ### Raspberry Pi State (`state.py`)
 - `FrameData`: Raw camera frame, timestamp
 - `FaceState`: Detection results, bbox, landmarks, yaw/pitch/roll, is_facing
-- `EspState`: Limit switch, servo position, light state, connection status
+- `EspState`: Limit switch, 3x servo positions, light state, connection status
+- `CommandState`: 3x servo targets, light command, RGB values, matrix patterns
 - `SystemState`: FPS, uptime, errors
 
 ### ESP32 State (`state.h`)
 - `InputState`: Limit switch readings
-- `OutputState`: Current servo angle, light state
-- `CommandState`: Target values received from Pi
+- `OutputState`: 3x servo angles, 3x servo moving flags, light state
+- `CommandState`: 3x target angles, light command, RGB values, matrix patterns
 
 ## UART Protocol
 
-Bidirectional ASCII protocol at 115200 baud.
+Bidirectional ASCII protocol at 115200 baud over USB Serial.
 
-**Pi → ESP32:** `$CMD,<servo_target>,<light_cmd>,<flags>\n`
-**ESP32 → Pi:** `$STS,<limit>,<servo_pos>,<light_state>,<flags>\n`
+**Pi → ESP32 (Command):**
+```
+$CMD,<s1>,<s2>,<s3>,<light>,<flags>,<r>,<g>,<b>,<ml>,<mr>\n
+```
 
-See `protocol/uart_protocol.md` for full specification.
+| Field | Description | Range |
+|-------|-------------|-------|
+| s1, s2, s3 | Servo target angles | 0.0 - 180.0 |
+| light | Light command | 0=OFF, 1=ON, 2=AUTO |
+| flags | Command flags | Bit field |
+| r, g, b | RGB LED values | 0 - 255 |
+| ml, mr | Matrix patterns (left/right) | 0=OFF, 1=Circle, 2=X |
+
+**ESP32 → Pi (Status):**
+```
+$STS,<limit>,<s1>,<s2>,<s3>,<light>,<flags>,<test>\n
+```
+
+| Field | Description | Range |
+|-------|-------------|-------|
+| limit | Limit switch state | 0=CLEAR, 1=CW, 2=CCW |
+| s1, s2, s3 | Servo positions | 0.0 - 180.0 |
+| light | Light state | 0=OFF, 1=ON |
+| flags | Status flags | Bit field |
+| test | Test active | 0=NO, 1=YES |
 
 ## Hardware Connections
 
-### UART Wiring
-```
-Pi GPIO14 (TX) ──────── ESP32 GPIO16 (RX)
-Pi GPIO15 (RX) ──────── ESP32 GPIO17 (TX)
-Pi GND ─────────────── ESP32 GND
-```
+### ESP32 Pinout (defined in `esp32/include/pins.h`)
 
-### ESP32 Pinout (defined in `esp32/include/config.h`)
-- Servo PWM: GPIO 18
-- Light output: GPIO 19
-- Limit switch input: GPIO 21
-- Built-in LED: GPIO 2 (for testing)
+| GPIO | Function | Notes |
+|------|----------|-------|
+| 8 | Servo 1 PWM | Channel 0, Timer 0 |
+| 7 | Servo 2 PWM | Channel 1, Timer 0 |
+| 5 | Servo 3 PWM | Channel 2, Timer 1 |
+| 27 | RGB Red | Channel 4, Timer 2 |
+| 14 | RGB Green | Channel 5, Timer 2 |
+| 12 | RGB Blue | Channel 6, Timer 3 |
+| 25 | Matrix Data (DIN) | SPI MOSI |
+| 32 | Matrix Clock (CLK) | SPI SCK |
+| 26 | Matrix CS (Load) | SPI CS |
+| 21 | Limit Switch | Input, internal pullup |
+| 9 | Test LED | Status indicator |
+
+### PWM Channel / Timer Mapping
+
+**Important:** Channels sharing a timer must use the same frequency/resolution.
+
+| Channels | Timer | Usage | Frequency | Resolution |
+|----------|-------|-------|-----------|------------|
+| 0, 1 | Timer 0 | Servo 1, 2 | 50 Hz | 16-bit |
+| 2, 3 | Timer 1 | Servo 3 | 50 Hz | 16-bit |
+| 4, 5 | Timer 2 | RGB R, G | 5 kHz | 8-bit |
+| 6, 7 | Timer 3 | RGB B | 5 kHz | 8-bit |
+
+### UART Connection
+
+ESP32 connects to Pi via USB cable. The ESP32 appears as:
+- Windows: `COMx` (e.g., COM6)
+- Linux/Pi: `/dev/ttyUSB0` or `/dev/ttyACM0`
 
 ## Command Flags
 
-The protocol supports command flags for special operations (bit field in flags byte):
-
 | Bit | Name | Description |
 |-----|------|-------------|
-| 0 | `CMD_FLAG_LED_TEST` | Trigger LED blink test (5 blinks) |
+| 0 | `CMD_FLAG_LED_TEST` | Trigger LED blink test |
 
-Flags are set by Pi, transmitted via UART, and cleared by ESP32 after processing.
+## Servo Behavior
+
+All 3 servos move together based on face detection:
+- **Face detected AND facing camera:** All servos → 180°
+- **No face OR not facing:** All servos → 0°
 
 ## Dashboard UI
 
@@ -115,99 +162,84 @@ OpenCV-based dashboard with two panels:
 ```
 ┌─────────────────────────────┬───────────────────────┐
 │                             │  FACE                 │
-│   [Live Camera Feed]        │  Detected: ✓          │
+│   [Live Camera Feed]        │  Detected: YES/NO     │
 │                             │  Yaw/Pitch/Roll       │
 │   - Bounding box overlay    │  Facing: YES/NO       │
 │   - Facial landmarks        │                       │
-│   - Pose axes               │  SERVO                │
-│   - Facing indicator        │  Target/Actual        │
-│                             │  Limit: CLEAR/HIT     │
+│   - Pose axes               │  SERVOS               │
+│   - Facing indicator        │  Targets: X°/Y°/Z°    │
+│                             │  Actual: X°/Y°/Z°     │
+│                             │  Limit: CLEAR/CW/CCW  │
+│                             │                       │
+│                             │  LIGHTS               │
+│                             │  Command/State        │
 │                             │                       │
 │                             │  SYSTEM               │
 │                             │  FPS, UART status     │
 │                             │                       │
 │                             │  TEST                 │
 │                             │  [LED Blink Test]     │
+│                             │                       │
+│   [========= SERVO ========]│                       │
 └─────────────────────────────┴───────────────────────┘
 ```
 
 ### Dashboard Controls
 - **Keyboard:**
   - `Q` / `ESC`: Quit application
-  - `R`: Reset servo to center (90°)
+  - `R`: Reset all servos to center (90°)
   - `L`: Cycle light mode (OFF → ON → AUTO)
 - **Mouse:**
-  - Click "LED Blink Test" button: Triggers 5 blinks on ESP32 built-in LED
+  - Click "LED Blink Test" button: Triggers test LED on ESP32
 
 ## Key Algorithms
 
-### Face Detection & Landmarks
-Uses MediaPipe Tasks API with FaceLandmarker:
-- Model: `face_landmarker.task` (auto-downloaded on first run)
-- Provides 478 facial landmarks
-- Includes facial transformation matrix for pose estimation
-- Model stored in `rpi/src/models/` (gitignored)
+### Face Detection (Hybrid YOLO + MediaPipe)
+1. **YOLO-face** detects faces robustly (handles partial occlusion)
+2. **Crop** detected face region with padding
+3. **MediaPipe FaceLandmarker** extracts 478 landmarks for pose estimation
+4. **Fallback:** MediaPipe-only mode if YOLO unavailable
 
 ### Face Angle Calculation
-Two methods for head pose estimation:
-1. **Transformation Matrix** (preferred): Uses FaceLandmarker's built-in pose output
-2. **solvePnP Fallback**: Estimates pose from 6 key landmarks using OpenCV
-
-Outputs:
+Uses MediaPipe's facial transformation matrix for head pose:
 - Yaw: Horizontal rotation (left/right)
 - Pitch: Vertical rotation (up/down)
 - Roll: Tilt rotation
 
 ### Facing Detection
-Subject is considered "facing" when `|yaw| < FACING_THRESHOLD` (configurable).
-
-### Servo Tracking
-Servo target = 90° + (face_x_offset * TRACKING_GAIN)
-Clamped to safe range, respects limit switch boundaries.
+Subject is "facing" when `|yaw| < FACING_YAW_THRESHOLD` (default: 15°)
 
 ## Cross-Platform Development
 
-The Pi code supports development on Windows before deployment to Raspberry Pi.
-
 ### Platform Detection
 
-`config.py` automatically detects the platform and sets appropriate defaults:
+`config.py` auto-detects platform and sets defaults:
 
 | Platform | UART Port Default | Detection |
 |----------|-------------------|-----------|
 | Windows | `COM3` | `platform.system() == "Windows"` |
-| Raspberry Pi | `/dev/ttyS0` | Linux + `/proc/device-tree/model` exists |
+| Raspberry Pi | `/dev/ttyS0` | Linux + `/proc/device-tree/model` |
 | Linux | `/dev/ttyUSB0` | `platform.system() == "Linux"` |
-
-### Mock UART Mode
-
-For testing without ESP32 hardware, enable mock mode:
-
-```python
-# In rpi/src/local_config.py
-UART_MOCK_ENABLED = True
-```
-
-The `MockSerial` class simulates:
-- ESP32 status responses at 50Hz
-- Servo position tracking with movement simulation
-- Limit switch triggering at servo extremes
-- Realistic noise on position readings
 
 ### Local Configuration
 
-Machine-specific settings go in `rpi/src/local_config.py` (gitignored):
+Machine-specific settings in `rpi/src/local_config.py` (gitignored):
 
 ```python
 # Windows development
-UART_PORT = "COM5"
-UART_MOCK_ENABLED = True
+UART_PORT = "COM6"
+UART_MOCK_ENABLED = False
 
-# Or Raspberry Pi with USB adapter
+# Raspberry Pi with USB-connected ESP32
 UART_PORT = "/dev/ttyUSB0"
 ```
 
-See `local_config.example.py` for all available overrides.
+### Mock UART Mode
+
+For testing without hardware:
+```python
+UART_MOCK_ENABLED = True
+```
 
 ## Development Commands
 
@@ -233,36 +265,47 @@ python main.py
 cd esp32
 pio run                 # Build
 pio run -t upload       # Upload to device
-pio device monitor      # Serial monitor
+pio device monitor      # Serial monitor (115200 baud)
 ```
 
-## Configuration
+## Configuration Files
 
-### Raspberry Pi (`rpi/src/config.py`)
-- Platform detection (`IS_WINDOWS`, `IS_LINUX`, `IS_RASPBERRY_PI`)
-- Camera settings (resolution, fps, backend)
+### `esp32/include/pins.h`
+All hardware pin assignments. Edit this file to change wiring.
+
+### `esp32/include/config.h`
+- PWM settings (frequency, resolution, channels)
+- Servo limits and speed
+- Timing intervals
+- Debug enable flag
+
+### `rpi/src/config.py`
+- Platform detection
+- Camera settings
 - Face detection thresholds
-- UART port (platform-specific defaults) and baud rate
-- Mock UART toggle for hardware-less testing
+- UART settings
 - Dashboard layout
 
-### Local Overrides (`rpi/src/local_config.py`)
+### `rpi/src/local_config.py`
 - Machine-specific UART port
-- Mock mode enable/disable
-- Camera index override
-- Debug settings
+- Mock mode toggle
 
-### ESP32 (`esp32/include/config.h`)
-- Pin assignments
-- Servo limits and speed
-- UART settings
-- Timing intervals
+## Debugging
+
+### Enable ESP32 Debug Output
+In `esp32/include/config.h`:
+```c
+#define DEBUG_ENABLED       1
+```
+
+### View UART Traffic
+Debug mode prints all received/sent packets to Serial.
 
 ## Important Notes
 
-1. **Thread Safety**: All state access on Pi goes through `AppState.lock`
-2. **Limit Switch Safety**: ESP32 immediately stops servo and reports to Pi when limit is hit
-3. **Graceful Degradation**: System continues operating if UART disconnects (using last known values)
-4. **Light Controller**: Currently uses placeholder functions - implement based on actual hardware
-5. **Cross-Platform**: Code runs on Windows (for development) and Raspberry Pi (for deployment)
-6. **Mock Mode**: Test full application without ESP32 by enabling `UART_MOCK_ENABLED`
+1. **Thread Safety**: All Pi state access goes through `AppState.lock`
+2. **Timer Conflicts**: PWM channels sharing a timer must use same freq/resolution
+3. **USB Serial**: ESP32 uses USB Serial for communication, not GPIO UART
+4. **Limit Switch**: Only affects Servo 1 (main servo)
+5. **Cross-Platform**: Code runs on Windows (development) and Pi (deployment)
+6. **Pin 5**: ESP32 strapping pin - works on ESP32-PICO, may need pull-up on others

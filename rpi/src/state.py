@@ -58,7 +58,7 @@ class EspState:
     connected: bool = False
     limit_triggered: bool = False
     limit_direction: int = 0  # 0=none, 1=CW, 2=CCW
-    servo_position: float = 90.0
+    servo_positions: tuple[float, float, float] = (90.0, 90.0, 90.0)  # 3 servos
     light_state: bool = False
     flags: int = 0
     test_active: bool = False  # True when test was triggered on ESP32
@@ -67,7 +67,7 @@ class EspState:
     def update_from_packet(
         self,
         limit: int,
-        servo_pos: float,
+        servo_positions: tuple[float, float, float],
         light_state: int,
         flags: int,
         test_active: int = 0,
@@ -76,7 +76,7 @@ class EspState:
         self.connected = True
         self.limit_triggered = limit != 0
         self.limit_direction = limit
-        self.servo_position = servo_pos
+        self.servo_positions = servo_positions
         self.light_state = light_state == 1
         self.flags = flags
         self.test_active = test_active == 1
@@ -92,9 +92,14 @@ class EspState:
 class CommandState:
     """Commands to send to ESP32."""
 
-    servo_target: float = 90.0
+    servo_targets: tuple[float, float, float] = (90.0, 90.0, 90.0)  # 3 servos
     light_command: int = 2  # Default to AUTO
     flags: int = 0
+    rgb_r: int = 0
+    rgb_g: int = 0
+    rgb_b: int = 0
+    matrix_left: int = 1   # Left matrix pattern (0=off, 1=circle, 2=X)
+    matrix_right: int = 2  # Right matrix pattern (0=off, 1=circle, 2=X)
 
 
 @dataclass
@@ -108,6 +113,8 @@ class SystemState:
     uptime: float = 0.0
     start_time: float = field(default_factory=time.time)
     errors: list[str] = field(default_factory=list)
+    last_tx_packet: str = ""  # Last command sent to ESP32
+    last_rx_packet: str = ""  # Last status received from ESP32
 
     def add_error(self, error: str) -> None:
         """Add error to list, keeping last 10."""
@@ -216,14 +223,14 @@ class AppState:
     def update_esp_from_packet(
         self,
         limit: int,
-        servo_pos: float,
+        servo_positions: tuple[float, float, float],
         light_state: int,
         flags: int,
         test_active: int = 0,
     ) -> None:
         """Thread-safe ESP state update from received packet."""
         with self._lock:
-            self._esp.update_from_packet(limit, servo_pos, light_state, flags, test_active)
+            self._esp.update_from_packet(limit, servo_positions, light_state, flags, test_active)
 
     def get_esp(self) -> EspState:
         """Thread-safe ESP state retrieval (returns copy)."""
@@ -232,7 +239,7 @@ class AppState:
                 connected=self._esp.connected,
                 limit_triggered=self._esp.limit_triggered,
                 limit_direction=self._esp.limit_direction,
-                servo_position=self._esp.servo_position,
+                servo_positions=self._esp.servo_positions,
                 light_state=self._esp.light_state,
                 flags=self._esp.flags,
                 test_active=self._esp.test_active,
@@ -250,26 +257,59 @@ class AppState:
 
     def set_command(
         self,
-        servo_target: Optional[float] = None,
+        servo_targets: Optional[tuple[float, float, float]] = None,
+        servo_target_1: Optional[float] = None,
+        servo_target_2: Optional[float] = None,
+        servo_target_3: Optional[float] = None,
         light_command: Optional[int] = None,
         flags: Optional[int] = None,
+        rgb_r: Optional[int] = None,
+        rgb_g: Optional[int] = None,
+        rgb_b: Optional[int] = None,
+        matrix_left: Optional[int] = None,
+        matrix_right: Optional[int] = None,
     ) -> None:
         """Thread-safe command update."""
         with self._lock:
-            if servo_target is not None:
-                self._command.servo_target = servo_target
+            if servo_targets is not None:
+                self._command.servo_targets = servo_targets
+            else:
+                # Allow individual servo updates
+                targets = list(self._command.servo_targets)
+                if servo_target_1 is not None:
+                    targets[0] = servo_target_1
+                if servo_target_2 is not None:
+                    targets[1] = servo_target_2
+                if servo_target_3 is not None:
+                    targets[2] = servo_target_3
+                self._command.servo_targets = tuple(targets)
             if light_command is not None:
                 self._command.light_command = light_command
             if flags is not None:
                 self._command.flags = flags
+            if rgb_r is not None:
+                self._command.rgb_r = rgb_r
+            if rgb_g is not None:
+                self._command.rgb_g = rgb_g
+            if rgb_b is not None:
+                self._command.rgb_b = rgb_b
+            if matrix_left is not None:
+                self._command.matrix_left = matrix_left
+            if matrix_right is not None:
+                self._command.matrix_right = matrix_right
 
     def get_command(self) -> CommandState:
         """Thread-safe command retrieval (returns copy)."""
         with self._lock:
             return CommandState(
-                servo_target=self._command.servo_target,
+                servo_targets=self._command.servo_targets,
                 light_command=self._command.light_command,
                 flags=self._command.flags,
+                rgb_r=self._command.rgb_r,
+                rgb_g=self._command.rgb_g,
+                rgb_b=self._command.rgb_b,
+                matrix_left=self._command.matrix_left,
+                matrix_right=self._command.matrix_right,
             )
 
     def set_command_flag(self, flag: int) -> None:
@@ -299,15 +339,19 @@ class AppState:
                 self._system.face_tracker_fps = face_tracker_fps
             self._system.update_uptime()
 
-    def increment_uart_tx(self) -> None:
+    def increment_uart_tx(self, packet: str = "") -> None:
         """Thread-safe UART TX counter increment."""
         with self._lock:
             self._system.uart_tx_count += 1
+            if packet:
+                self._system.last_tx_packet = packet.strip()
 
-    def increment_uart_rx(self) -> None:
+    def increment_uart_rx(self, packet: str = "") -> None:
         """Thread-safe UART RX counter increment."""
         with self._lock:
             self._system.uart_rx_count += 1
+            if packet:
+                self._system.last_rx_packet = packet.strip()
 
     def add_error(self, error: str) -> None:
         """Thread-safe error logging."""
@@ -326,6 +370,8 @@ class AppState:
                 uptime=self._system.uptime,
                 start_time=self._system.start_time,
                 errors=self._system.errors.copy(),
+                last_tx_packet=self._system.last_tx_packet,
+                last_rx_packet=self._system.last_rx_packet,
             )
 
     # -------------------------------------------------------------------------
@@ -367,7 +413,7 @@ class AppState:
                 connected=self._esp.connected,
                 limit_triggered=self._esp.limit_triggered,
                 limit_direction=self._esp.limit_direction,
-                servo_position=self._esp.servo_position,
+                servo_positions=self._esp.servo_positions,
                 light_state=self._esp.light_state,
                 flags=self._esp.flags,
                 test_active=self._esp.test_active,
@@ -375,9 +421,14 @@ class AppState:
             )
 
             command = CommandState(
-                servo_target=self._command.servo_target,
+                servo_targets=self._command.servo_targets,
                 light_command=self._command.light_command,
                 flags=self._command.flags,
+                rgb_r=self._command.rgb_r,
+                rgb_g=self._command.rgb_g,
+                rgb_b=self._command.rgb_b,
+                matrix_left=self._command.matrix_left,
+                matrix_right=self._command.matrix_right,
             )
 
             self._system.update_uptime()
@@ -389,6 +440,8 @@ class AppState:
                 uptime=self._system.uptime,
                 start_time=self._system.start_time,
                 errors=self._system.errors.copy(),
+                last_tx_packet=self._system.last_tx_packet,
+                last_rx_packet=self._system.last_rx_packet,
             )
 
             return frame, face, esp, command, system

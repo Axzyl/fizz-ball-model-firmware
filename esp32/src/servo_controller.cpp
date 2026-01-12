@@ -1,8 +1,26 @@
 #include "servo_controller.h"
 #include "config.h"
 
-// Current servo angle
-static float current_angle = SERVO_CENTER_ANGLE;
+// Servo pin assignments
+static const uint8_t servo_pins[NUM_SERVOS] = {
+    SERVO_1_PIN,
+    SERVO_2_PIN,
+    SERVO_3_PIN
+};
+
+// Servo PWM channel assignments
+static const uint8_t servo_channels[NUM_SERVOS] = {
+    SERVO_1_PWM_CHANNEL,
+    SERVO_2_PWM_CHANNEL,
+    SERVO_3_PWM_CHANNEL
+};
+
+// Current servo angles
+static float current_angles[NUM_SERVOS] = {
+    SERVO_CENTER_ANGLE,
+    SERVO_CENTER_ANGLE,
+    SERVO_CENTER_ANGLE
+};
 
 /**
  * Convert angle to PWM duty cycle.
@@ -29,30 +47,44 @@ static uint32_t angle_to_duty(float angle) {
 }
 
 void servo_init() {
-    // Configure PWM channel
-    ledcSetup(SERVO_PWM_CHANNEL, SERVO_PWM_FREQ, SERVO_PWM_RESOLUTION);
-    ledcAttachPin(SERVO_PIN, SERVO_PWM_CHANNEL);
+    // Configure PWM channels for all servos
+    for (int i = 0; i < NUM_SERVOS; i++) {
+        ledcSetup(servo_channels[i], SERVO_PWM_FREQ, SERVO_PWM_RESOLUTION);
+        ledcAttachPin(servo_pins[i], servo_channels[i]);
 
-    // Move to center position
-    servo_set_angle(SERVO_CENTER_ANGLE);
+        // Move to center position
+        servo_set_angle(i, SERVO_CENTER_ANGLE);
 
-    DEBUG_PRINTLN("Servo initialized");
+        DEBUG_PRINTF("Servo %d initialized on pin %d, channel %d\n",
+                     i + 1, servo_pins[i], servo_channels[i]);
+    }
+
+    DEBUG_PRINTLN("All servos initialized");
 }
 
-void servo_set_angle(float angle) {
+void servo_set_angle(uint8_t servo_index, float angle) {
+    if (servo_index >= NUM_SERVOS) {
+        return;
+    }
+
     // Constrain angle
     angle = constrain(angle, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE);
 
     // Update PWM
     uint32_t duty = angle_to_duty(angle);
-    ledcWrite(SERVO_PWM_CHANNEL, duty);
+    ledcWrite(servo_channels[servo_index], duty);
 
-    current_angle = angle;
+    current_angles[servo_index] = angle;
 
-    DEBUG_PRINTF("Servo set to %.1f degrees (duty=%d)\n", angle, duty);
+    DEBUG_PRINTF("Servo %d set to %.1f degrees (duty=%d)\n",
+                 servo_index + 1, angle, duty);
 }
 
-float servo_move_toward(float current, float target, float speed) {
+float servo_move_toward(uint8_t servo_index, float current, float target, float speed) {
+    if (servo_index >= NUM_SERVOS) {
+        return current;
+    }
+
     float diff = target - current;
 
     // Check if already at target
@@ -71,11 +103,14 @@ float servo_move_toward(float current, float target, float speed) {
     float new_angle = current + move_amount;
     new_angle = constrain(new_angle, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE);
 
-    servo_set_angle(new_angle);
+    servo_set_angle(servo_index, new_angle);
 
     return new_angle;
 }
 
-float servo_get_angle() {
-    return current_angle;
+float servo_get_angle(uint8_t servo_index) {
+    if (servo_index >= NUM_SERVOS) {
+        return SERVO_CENTER_ANGLE;
+    }
+    return current_angles[servo_index];
 }

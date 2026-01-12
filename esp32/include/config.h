@@ -1,26 +1,8 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-// =============================================================================
-// Pin Definitions
-// =============================================================================
-
-// UART pins (communicating with Raspberry Pi)
-// Note: GPIO 16/17 conflict with PSRAM on some boards, using 25/26 instead
-#define UART_RX_PIN         25
-#define UART_TX_PIN         26
-
-// Servo control
-#define SERVO_PIN           8
-
-// Light control
-#define LIGHT_PIN           19
-
-// Limit switch (active LOW with internal pullup)
-#define LIMIT_SWITCH_PIN    21
-
-// Test LED pin
-#define TEST_LED_PIN        9
+// Include hardware pin definitions (edit pins.h to change wiring)
+#include "pins.h"
 
 // =============================================================================
 // UART Settings
@@ -31,7 +13,7 @@
 #define UART_TX_BUFFER_SIZE 128
 
 // =============================================================================
-// Servo Settings
+// Servo Settings (3 servos)
 // =============================================================================
 
 #define SERVO_MIN_ANGLE     0.0f
@@ -43,21 +25,42 @@
 
 // PWM settings
 #define SERVO_PWM_FREQ      50      // 50 Hz standard servo frequency
-#define SERVO_PWM_CHANNEL   0
 #define SERVO_PWM_RESOLUTION 16
+
+// PWM channels for each servo (channels 0-2)
+#define SERVO_1_PWM_CHANNEL 0
+#define SERVO_2_PWM_CHANNEL 1
+#define SERVO_3_PWM_CHANNEL 2
 
 // Pulse width range (microseconds)
 #define SERVO_MIN_PULSE_US  500     // 0 degrees
 #define SERVO_MAX_PULSE_US  2500    // 180 degrees
 
 // =============================================================================
-// Light Settings
+// RGB Strip Settings
 // =============================================================================
+
+// PWM channels (channels 4-6 to avoid timer conflict with servos)
+// Servo channels 0-2 use timers 0,0,1
+// RGB channels 4-6 use timers 2,2,3 (no overlap)
+#define RGB_CH_R            4
+#define RGB_CH_G            5
+#define RGB_CH_B            6
+
+// PWM settings
+#define RGB_PWM_FREQ        5000    // 5kHz PWM frequency
+#define RGB_PWM_RES         8       // 8-bit resolution (0-255)
 
 // Light command values (from protocol)
 #define LIGHT_CMD_OFF       0
 #define LIGHT_CMD_ON        1
 #define LIGHT_CMD_AUTO      2
+
+// =============================================================================
+// LED Matrix Settings
+// =============================================================================
+
+#define MATRIX_DEFAULT_BRIGHTNESS   8   // 0-15
 
 // =============================================================================
 // Limit Switch Settings
@@ -108,6 +111,7 @@
 // =============================================================================
 
 // Set to 1 to enable debug output on USB serial
+// WARNING: Debug output interferes with Pi communication - keep disabled!
 #define DEBUG_ENABLED       0
 
 #if DEBUG_ENABLED

@@ -110,9 +110,9 @@ class Dashboard:
                 logger.info("User requested exit")
                 self.stop_event.set()
                 break
-            elif key == ord("r"):  # Reset servo to center
-                self.state.set_command(servo_target=90.0)
-                logger.info("Servo reset to center")
+            elif key == ord("r"):  # Reset servos 2 & 3 to center (servo 1 controlled by limit switch)
+                self.state.set_command(servo_target_2=90.0, servo_target_3=90.0)
+                logger.info("Servos 2 & 3 reset to center")
             elif key == ord("l"):  # Toggle light mode
                 current = self.state.get_command().light_command
                 new_mode = (current + 1) % 3
@@ -192,13 +192,13 @@ class Dashboard:
         )
 
         # Draw keyboard shortcuts help
-        help_text = "Q: Quit | R: Reset Servo | L: Cycle Light Mode"
+        help_text = "Q:Quit | R:Reset | L:Light | Scroll to see more"
         cv2.putText(
             dashboard,
             help_text,
             (config.VIDEO_PANEL_WIDTH + 10, config.DASHBOARD_HEIGHT - 10),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.35,
+            0.32,
             (100, 100, 100),
             1,
         )
@@ -233,13 +233,26 @@ class Dashboard:
         self.mouse_x = x
         self.mouse_y = y
 
+        # Handle mouse wheel scrolling
+        if event == cv2.EVENT_MOUSEWHEEL:
+            # Check if mouse is over telemetry panel
+            if x >= config.VIDEO_PANEL_WIDTH:
+                # Scroll direction: positive flags = scroll up, negative = scroll down
+                # We want scroll up to show content above (decrease offset)
+                # and scroll down to show content below (increase offset)
+                direction = -1 if flags > 0 else 1
+                self.telemetry_panel.scroll(direction)
+
         # Handle clicks
-        if event == cv2.EVENT_LBUTTONDOWN:
+        elif event == cv2.EVENT_LBUTTONDOWN:
             # Check if click is in telemetry panel area
             if x >= config.VIDEO_PANEL_WIDTH:
-                # Convert to telemetry panel coordinates
+                # Convert to telemetry panel coordinates (with scroll offset)
                 panel_x = x - config.VIDEO_PANEL_WIDTH
-                panel_y = y
+                panel_y = y + self.telemetry_panel.scroll_offset
+
+                # Store click position for color wheel
+                self._last_click_x = panel_x
 
                 # Check if a button was clicked
                 button_name = self.telemetry_panel.get_button_at(panel_x, panel_y)
@@ -256,3 +269,37 @@ class Dashboard:
         if button_name == "led_test":
             logger.info("LED test triggered")
             self.state.trigger_led_test()
+
+        # RGB color controls
+        elif button_name == "rgb_off":
+            self.state.set_command(light_command=0, rgb_r=0, rgb_g=0, rgb_b=0)
+            logger.info("RGB set to OFF")
+        elif button_name == "color_wheel":
+            # Get click position and convert to color
+            # The click_x is stored when handling the click
+            if hasattr(self, '_last_click_x'):
+                r, g, b = self.telemetry_panel.get_color_from_wheel_click(self._last_click_x)
+                self.state.set_command(light_command=1, rgb_r=r, rgb_g=g, rgb_b=b)
+                logger.info(f"RGB set to R:{r} G:{g} B:{b}")
+
+        # Matrix left buttons
+        elif button_name == "matrix_left_off":
+            self.state.set_command(matrix_left=0)
+            logger.info("Left matrix set to OFF")
+        elif button_name == "matrix_left_circle":
+            self.state.set_command(matrix_left=1)
+            logger.info("Left matrix set to CIRCLE")
+        elif button_name == "matrix_left_x":
+            self.state.set_command(matrix_left=2)
+            logger.info("Left matrix set to X")
+
+        # Matrix right buttons
+        elif button_name == "matrix_right_off":
+            self.state.set_command(matrix_right=0)
+            logger.info("Right matrix set to OFF")
+        elif button_name == "matrix_right_circle":
+            self.state.set_command(matrix_right=1)
+            logger.info("Right matrix set to CIRCLE")
+        elif button_name == "matrix_right_x":
+            self.state.set_command(matrix_right=2)
+            logger.info("Right matrix set to X")

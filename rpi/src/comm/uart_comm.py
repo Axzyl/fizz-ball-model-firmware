@@ -27,7 +27,7 @@ class MockSerial:
     def __init__(self) -> None:
         self.is_open = True
         self._rx_buffer = bytearray()
-        self._servo_pos = 90.0
+        self._servo_positions = [90.0, 90.0, 90.0]  # 3 servos
         self._light_state = 0
         self._limit = 0
         self._last_update = time.time()
@@ -51,14 +51,16 @@ class MockSerial:
             line = data.decode("ascii").strip()
             if line.startswith("$CMD,"):
                 parts = line[5:].split(",")
-                if len(parts) >= 2:
-                    target = float(parts[0])
-                    light_cmd = int(parts[1])
+                if len(parts) >= 5:
+                    # Parse 3 servo targets
+                    targets = [float(parts[0]), float(parts[1]), float(parts[2])]
+                    light_cmd = int(parts[3])
 
-                    # Simulate servo movement
-                    self._servo_pos = self._move_toward(
-                        self._servo_pos, target, 5.0
-                    )
+                    # Simulate servo movements
+                    for i in range(3):
+                        self._servo_positions[i] = self._move_toward(
+                            self._servo_positions[i], targets[i], 5.0
+                        )
 
                     # Simulate light response
                     if light_cmd == 0:
@@ -67,10 +69,10 @@ class MockSerial:
                         self._light_state = 1
                     # AUTO mode keeps current state
 
-                    # Simulate limit switch at extremes
-                    if self._servo_pos <= 5:
+                    # Simulate limit switch at extremes (servo 1 only)
+                    if self._servo_positions[0] <= 5:
                         self._limit = 2  # CCW limit
-                    elif self._servo_pos >= 175:
+                    elif self._servo_positions[0] >= 175:
                         self._limit = 1  # CW limit
                     else:
                         self._limit = 0
@@ -96,9 +98,15 @@ class MockSerial:
         now = time.time()
         if now - self._last_update >= 0.02:  # 50Hz
             # Add some noise to simulate real hardware
-            servo_noise = random.uniform(-0.5, 0.5)
+            noise = [random.uniform(-0.5, 0.5) for _ in range(3)]
 
-            status = f"$STS,{self._limit},{self._servo_pos + servo_noise:.1f},{self._light_state},0\n"
+            status = (
+                f"$STS,{self._limit},"
+                f"{self._servo_positions[0] + noise[0]:.1f},"
+                f"{self._servo_positions[1] + noise[1]:.1f},"
+                f"{self._servo_positions[2] + noise[2]:.1f},"
+                f"{self._light_state},0,0\n"
+            )
             self._rx_buffer.extend(status.encode("ascii"))
             self._last_update = now
 
@@ -247,6 +255,9 @@ class UartComm(threading.Thread):
             if self.serial.in_waiting > 0:
                 data = self.serial.read(self.serial.in_waiting)
 
+                # Log raw received data for debugging
+                logger.debug(f"Raw RX ({len(data)} bytes): {data}")
+
                 # Feed to protocol parser
                 packets = self.protocol.feed(data)
 
@@ -254,14 +265,15 @@ class UartComm(threading.Thread):
                 for packet in packets:
                     self.state.update_esp_from_packet(
                         limit=packet.limit,
-                        servo_pos=packet.servo_position,
+                        servo_positions=packet.servo_positions,
                         light_state=packet.light_state,
                         flags=packet.flags,
                         test_active=packet.test_active,
                     )
-                    self.state.increment_uart_rx()
-                    logger.debug(
-                        f"RX: limit={packet.limit}, servo={packet.servo_position}, "
+                    rx_str = f"$STS,{packet.limit},{packet.servo_positions[0]:.1f},{packet.servo_positions[1]:.1f},{packet.servo_positions[2]:.1f},{packet.light_state},{packet.flags},{packet.test_active}"
+                    self.state.increment_uart_rx(rx_str)
+                    logger.info(
+                        f"RX: limit={packet.limit}, servos={packet.servo_positions}, "
                         f"light={packet.light_state}, test={packet.test_active}"
                     )
 
@@ -281,16 +293,23 @@ class UartComm(threading.Thread):
 
             # Create and send packet
             packet = self.protocol.create_command(
-                servo_target=command.servo_target,
+                servo_targets=command.servo_targets,
                 light_command=command.light_command,
                 flags=command.flags,
+                rgb_r=command.rgb_r,
+                rgb_g=command.rgb_g,
+                rgb_b=command.rgb_b,
+                matrix_left=command.matrix_left,
+                matrix_right=command.matrix_right,
             )
 
             self.serial.write(packet)
-            self.state.increment_uart_tx()
+            self.state.increment_uart_tx(packet.decode("ascii"))
 
             logger.debug(
-                f"TX: servo={command.servo_target}, light={command.light_command}"
+                f"TX: servos={command.servo_targets}, light={command.light_command}, "
+                f"RGB=({command.rgb_r},{command.rgb_g},{command.rgb_b}), "
+                f"matrix=({command.matrix_left},{command.matrix_right})"
             )
 
         except Exception as e:

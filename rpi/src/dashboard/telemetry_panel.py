@@ -67,6 +67,23 @@ class TelemetryPanel:
         self.buttons: list[ButtonInfo] = []
         self.hovered_button: Optional[str] = None
 
+        # Scrolling support
+        self.scroll_offset = 0
+        self.content_height = 0  # Will be calculated during render
+        self.scroll_speed = 30  # Pixels per scroll tick
+
+    def scroll(self, direction: int) -> None:
+        """
+        Scroll the panel content.
+
+        Args:
+            direction: Positive to scroll down, negative to scroll up
+        """
+        self.scroll_offset += direction * self.scroll_speed
+        # Clamp scroll offset
+        max_scroll = max(0, self.content_height - self.height + 50)
+        self.scroll_offset = max(0, min(self.scroll_offset, max_scroll))
+
     def render(
         self,
         face: FaceState,
@@ -88,10 +105,16 @@ class TelemetryPanel:
         Returns:
             Rendered panel as BGR image
         """
-        # Determine which button is hovered (using previous frame's buttons)
-        self.hovered_button = None
+        # Adjust hover position for scroll offset
+        adjusted_hover_pos = None
         if hover_pos:
             hx, hy = hover_pos
+            adjusted_hover_pos = (hx, hy + self.scroll_offset)
+
+        # Determine which button is hovered (using previous frame's buttons)
+        self.hovered_button = None
+        if adjusted_hover_pos:
+            hx, hy = adjusted_hover_pos
             button_name = self.get_button_at(hx, hy)
             if button_name:
                 self.hovered_button = button_name
@@ -99,8 +122,9 @@ class TelemetryPanel:
         # Clear button list for this frame (after hover check)
         self.buttons = []
 
-        # Create panel with background
-        panel = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+        # Create a larger buffer for content (will be cropped to viewport)
+        buffer_height = max(self.height, 900)  # Ensure enough space for all content
+        panel = np.zeros((buffer_height, self.width, 3), dtype=np.uint8)
         panel[:] = config.COLOR_PANEL_BG
 
         y = self.MARGIN
@@ -119,9 +143,11 @@ class TelemetryPanel:
         y += self.SECTION_SPACING // 2
 
         # Servo section
-        y = self._draw_section_header(panel, "SERVO", y)
-        y = self._draw_value(panel, "Target", f"{command.servo_target:.1f}°", y)
-        y = self._draw_value(panel, "Actual", f"{esp.servo_position:.1f}°", y)
+        y = self._draw_section_header(panel, "SERVOS", y)
+        targets = command.servo_targets
+        positions = esp.servo_positions
+        y = self._draw_value(panel, "Targets", f"{targets[0]:.0f}° / {targets[1]:.0f}° / {targets[2]:.0f}°", y)
+        y = self._draw_value(panel, "Actual", f"{positions[0]:.0f}° / {positions[1]:.0f}° / {positions[2]:.0f}°", y)
 
         # Limit switch
         limit_text = "CLEAR"
@@ -142,6 +168,22 @@ class TelemetryPanel:
 
         y += self.SECTION_SPACING // 2
 
+        # RGB section with color buttons
+        y = self._draw_section_header(panel, "RGB", y)
+        y = self._draw_value(panel, "Current", f"R:{command.rgb_r} G:{command.rgb_g} B:{command.rgb_b}", y)
+        y = self._draw_color_buttons(panel, y)
+
+        y += self.SECTION_SPACING // 2
+
+        # Matrix section with pattern buttons
+        y = self._draw_section_header(panel, "MATRIX", y)
+        left_pattern = ["OFF", "Circle", "X"][command.matrix_left] if command.matrix_left < 3 else "?"
+        right_pattern = ["OFF", "Circle", "X"][command.matrix_right] if command.matrix_right < 3 else "?"
+        y = self._draw_value(panel, "Patterns", f"L:{left_pattern} R:{right_pattern}", y)
+        y = self._draw_matrix_buttons(panel, y)
+
+        y += self.SECTION_SPACING // 2
+
         # System section
         y = self._draw_section_header(panel, "SYSTEM", y)
         y = self._draw_value(panel, "FPS", f"{system.fps:.1f}", y)
@@ -157,16 +199,49 @@ class TelemetryPanel:
 
         y += self.SECTION_SPACING // 2
 
+        # UART Packets section (for debugging)
+        y = self._draw_section_header(panel, "UART PACKETS", y)
+        # Truncate packets if too long
+        tx_display = system.last_tx_packet[:45] + "..." if len(system.last_tx_packet) > 45 else system.last_tx_packet
+        rx_display = system.last_rx_packet[:45] + "..." if len(system.last_rx_packet) > 45 else system.last_rx_packet
+        y = self._draw_value(panel, "Last TX", tx_display or "-", y)
+        y = self._draw_value(panel, "Last RX", rx_display or "-", y)
+
+        y += self.SECTION_SPACING // 2
+
         # Test section with buttons
         y = self._draw_section_header(panel, "TEST", y)
         y = self._draw_value(panel, "Response", "OK" if esp.test_active else "-", y,
                              config.COLOR_FACING_YES if esp.test_active else (128, 128, 128))
         y = self._draw_button(panel, "LED Test", "led_test", y)
 
-        # Draw servo position indicator bar
-        self._draw_servo_bar(panel, command.servo_target, esp.servo_position)
+        # Store content height for scrolling calculations
+        self.content_height = y + 60  # Add padding for servo bar
 
-        return panel
+        # Draw servo position indicator bar at fixed position (bottom of viewport)
+        # This will be drawn on the final viewport, not the scrollable content
+
+        # Create viewport by cropping the buffer based on scroll offset
+        viewport = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+        viewport[:] = config.COLOR_PANEL_BG
+
+        # Calculate visible range
+        start_y = self.scroll_offset
+        end_y = min(start_y + self.height, panel.shape[0])
+        visible_height = end_y - start_y
+
+        # Copy visible portion to viewport
+        if visible_height > 0:
+            viewport[:visible_height] = panel[start_y:end_y]
+
+        # Draw servo bar at fixed position (bottom of viewport)
+        self._draw_servo_bar(viewport, command.servo_targets[0], esp.servo_positions[0])
+
+        # Draw scroll indicator if content overflows
+        if self.content_height > self.height:
+            self._draw_scroll_indicator(viewport)
+
+        return viewport
 
     def get_button_at(self, x: int, y: int) -> Optional[str]:
         """
@@ -307,6 +382,189 @@ class TelemetryPanel:
 
         return y + self.BUTTON_HEIGHT + 10
 
+    def _draw_color_buttons(
+        self,
+        panel: np.ndarray,
+        y: int,
+    ) -> int:
+        """Draw color wheel bar and Off button, return new y position."""
+        start_x = self.MARGIN + 10
+        bar_width = self.width - 2 * self.MARGIN - 50  # Leave room for Off button
+        bar_height = 30
+
+        # Draw color wheel bar (HSV gradient)
+        for i in range(bar_width):
+            # Convert position to hue (0-360)
+            hue = int((i / bar_width) * 180)  # OpenCV uses 0-180 for hue
+            # Create HSV color and convert to BGR
+            hsv_color = np.uint8([[[hue, 255, 255]]])
+            bgr_color = cv2.cvtColor(hsv_color, cv2.COLOR_HSV2BGR)[0][0]
+            cv2.line(
+                panel,
+                (start_x + i, y),
+                (start_x + i, y + bar_height),
+                tuple(int(c) for c in bgr_color),
+                1,
+            )
+
+        # Draw border around color bar
+        is_wheel_hovered = self.hovered_button == "color_wheel"
+        border_color = (255, 255, 255) if is_wheel_hovered else (120, 120, 120)
+        cv2.rectangle(
+            panel,
+            (start_x, y),
+            (start_x + bar_width, y + bar_height),
+            border_color,
+            2 if is_wheel_hovered else 1,
+        )
+
+        # Store color wheel as clickable area
+        self.buttons.append(ButtonInfo(
+            x=start_x,
+            y=y,
+            width=bar_width,
+            height=bar_height,
+            name="color_wheel",
+        ))
+
+        # Draw Off button next to color wheel
+        off_x = start_x + bar_width + 5
+        off_width = 40
+        is_off_hovered = self.hovered_button == "rgb_off"
+
+        cv2.rectangle(
+            panel,
+            (off_x, y),
+            (off_x + off_width, y + bar_height),
+            (40, 40, 40),
+            -1,
+        )
+        cv2.rectangle(
+            panel,
+            (off_x, y),
+            (off_x + off_width, y + bar_height),
+            (255, 255, 255) if is_off_hovered else (120, 120, 120),
+            2 if is_off_hovered else 1,
+        )
+        cv2.putText(
+            panel,
+            "OFF",
+            (off_x + 8, y + 20),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.4,
+            (200, 200, 200),
+            1,
+        )
+
+        self.buttons.append(ButtonInfo(
+            x=off_x,
+            y=y,
+            width=off_width,
+            height=bar_height,
+            name="rgb_off",
+        ))
+
+        # Store color wheel bounds for click handling
+        self._color_wheel_x = start_x
+        self._color_wheel_width = bar_width
+
+        return y + bar_height + 10
+
+    def get_color_from_wheel_click(self, x: int) -> tuple[int, int, int]:
+        """Convert x position on color wheel to RGB values."""
+        if not hasattr(self, '_color_wheel_x'):
+            return (255, 255, 255)
+
+        # Calculate relative position
+        rel_x = x - self._color_wheel_x
+        rel_x = max(0, min(rel_x, self._color_wheel_width - 1))
+
+        # Convert to hue
+        hue = int((rel_x / self._color_wheel_width) * 180)
+
+        # Convert HSV to RGB (not BGR)
+        hsv_color = np.uint8([[[hue, 255, 255]]])
+        bgr_color = cv2.cvtColor(hsv_color, cv2.COLOR_HSV2BGR)[0][0]
+
+        # Return as RGB (for sending to ESP32)
+        return (int(bgr_color[2]), int(bgr_color[1]), int(bgr_color[0]))
+
+    def _draw_matrix_buttons(
+        self,
+        panel: np.ndarray,
+        y: int,
+    ) -> int:
+        """Draw matrix pattern buttons and return new y position."""
+        # Pattern options
+        patterns = [
+            ("L:Off", "matrix_left_off"),
+            ("L:O", "matrix_left_circle"),
+            ("L:X", "matrix_left_x"),
+            ("R:Off", "matrix_right_off"),
+            ("R:O", "matrix_right_circle"),
+            ("R:X", "matrix_right_x"),
+        ]
+
+        button_width = 40
+        button_height = 24
+        spacing = 3
+        start_x = self.MARGIN + 10
+
+        for i, (label, name) in enumerate(patterns):
+            # Start new row for right matrix buttons
+            row = 0 if i < 3 else 1
+            col = i if i < 3 else i - 3
+
+            button_x = start_x + col * (button_width + spacing)
+            button_y = y + row * (button_height + spacing)
+
+            is_hovered = (self.hovered_button == name)
+
+            # Draw button background
+            bg_color = self.BUTTON_HOVER_COLOR if is_hovered else self.BUTTON_COLOR
+            cv2.rectangle(
+                panel,
+                (button_x, button_y),
+                (button_x + button_width, button_y + button_height),
+                bg_color,
+                -1,
+            )
+
+            # Draw border
+            border_color = (180, 180, 180) if is_hovered else (100, 100, 100)
+            cv2.rectangle(
+                panel,
+                (button_x, button_y),
+                (button_x + button_width, button_y + button_height),
+                border_color,
+                1,
+            )
+
+            # Draw label (centered)
+            text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.35, 1)[0]
+            text_x = button_x + (button_width - text_size[0]) // 2
+            text_y = button_y + (button_height + text_size[1]) // 2
+            cv2.putText(
+                panel,
+                label,
+                (text_x, text_y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.35,
+                self.BUTTON_TEXT_COLOR,
+                1,
+            )
+
+            # Store button info
+            self.buttons.append(ButtonInfo(
+                x=button_x,
+                y=button_y,
+                width=button_width,
+                height=button_height,
+                name=name,
+            ))
+
+        return y + 2 * (button_height + spacing) + 5
+
     def _draw_servo_bar(
         self,
         panel: np.ndarray,
@@ -368,6 +626,44 @@ class TelemetryPanel:
         # Label
         cv2.putText(panel, "SERVO", (bar_margin, self.height - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150, 150, 150), 1)
+
+    def _draw_scroll_indicator(self, panel: np.ndarray) -> None:
+        """Draw scroll indicator on right edge of panel."""
+        if self.content_height <= self.height:
+            return
+
+        # Scrollbar dimensions
+        bar_width = 6
+        bar_margin = 3
+        bar_x = self.width - bar_width - bar_margin
+        bar_top = 50  # Leave room at top
+        bar_bottom = self.height - 60  # Leave room for servo bar
+        bar_height = bar_bottom - bar_top
+
+        # Draw scrollbar track
+        cv2.rectangle(
+            panel,
+            (bar_x, bar_top),
+            (bar_x + bar_width, bar_bottom),
+            (60, 60, 60),
+            -1,
+        )
+
+        # Calculate thumb position and size
+        visible_ratio = self.height / self.content_height
+        thumb_height = max(20, int(bar_height * visible_ratio))
+        max_scroll = self.content_height - self.height
+        scroll_ratio = self.scroll_offset / max_scroll if max_scroll > 0 else 0
+        thumb_y = bar_top + int((bar_height - thumb_height) * scroll_ratio)
+
+        # Draw scrollbar thumb
+        cv2.rectangle(
+            panel,
+            (bar_x, thumb_y),
+            (bar_x + bar_width, thumb_y + thumb_height),
+            (150, 150, 150),
+            -1,
+        )
 
     def _format_uptime(self, seconds: float) -> str:
         """Format uptime in human-readable format."""

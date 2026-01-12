@@ -8,18 +8,30 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# Number of servos
+NUM_SERVOS = 3
+
 
 @dataclass
 class CommandPacket:
     """Command packet to send to ESP32."""
 
-    servo_target: float
+    servo_targets: tuple[float, float, float]  # Target angles for 3 servos
     light_command: int
     flags: int = 0
+    rgb_r: int = 0
+    rgb_g: int = 0
+    rgb_b: int = 0
+    matrix_left: int = 1   # Left matrix pattern (0=off, 1=circle, 2=X)
+    matrix_right: int = 2  # Right matrix pattern (0=off, 1=circle, 2=X)
 
     def encode(self) -> bytes:
         """Encode packet to bytes for transmission."""
-        packet = f"$CMD,{self.servo_target:.1f},{self.light_command},{self.flags}\n"
+        packet = (
+            f"$CMD,{self.servo_targets[0]:.1f},{self.servo_targets[1]:.1f},{self.servo_targets[2]:.1f},"
+            f"{self.light_command},{self.flags},"
+            f"{self.rgb_r},{self.rgb_g},{self.rgb_b},{self.matrix_left},{self.matrix_right}\n"
+        )
         return packet.encode("ascii")
 
 
@@ -28,7 +40,7 @@ class StatusPacket:
     """Status packet received from ESP32."""
 
     limit: int
-    servo_position: float
+    servo_positions: tuple[float, float, float]  # Current angles for 3 servos
     light_state: int
     flags: int
     test_active: int = 0  # 1 when test was triggered, stays high for 1 second
@@ -57,18 +69,23 @@ class StatusPacket:
             content = line[5:]  # Remove "$STS,"
             fields = content.split(",")
 
-            if len(fields) < 4 or len(fields) > 5:
+            # New format: limit, servo1, servo2, servo3, light_state, flags, test_active
+            if len(fields) < 6 or len(fields) > 7:
                 logger.debug(f"Invalid field count: {len(fields)}")
                 return None
 
             # Parse test_active if present (backwards compatible)
-            test_active = int(fields[4]) if len(fields) >= 5 else 0
+            test_active = int(fields[6]) if len(fields) >= 7 else 0
 
             return cls(
                 limit=int(fields[0]),
-                servo_position=float(fields[1]),
-                light_state=int(fields[2]),
-                flags=int(fields[3]),
+                servo_positions=(
+                    float(fields[1]),
+                    float(fields[2]),
+                    float(fields[3]),
+                ),
+                light_state=int(fields[4]),
+                flags=int(fields[5]),
                 test_active=test_active,
             )
 
@@ -94,25 +111,45 @@ class Protocol:
 
     def create_command(
         self,
-        servo_target: float,
+        servo_targets: tuple[float, float, float],
         light_command: int,
         flags: int = 0,
+        rgb_r: int = 0,
+        rgb_g: int = 0,
+        rgb_b: int = 0,
+        matrix_left: int = 1,
+        matrix_right: int = 2,
     ) -> bytes:
         """
         Create a command packet.
 
         Args:
-            servo_target: Target servo angle (0-180)
+            servo_targets: Target servo angles (0-180) for all 3 servos
             light_command: Light command (0=OFF, 1=ON, 2=AUTO)
             flags: Reserved flags
+            rgb_r: RGB red value (0-255)
+            rgb_g: RGB green value (0-255)
+            rgb_b: RGB blue value (0-255)
+            matrix_left: Left matrix pattern (0=off, 1=circle, 2=X)
+            matrix_right: Right matrix pattern (0=off, 1=circle, 2=X)
 
         Returns:
             Encoded packet bytes
         """
-        # Clamp servo target
-        servo_target = max(0.0, min(180.0, servo_target))
+        # Clamp servo targets
+        clamped_targets = tuple(
+            max(0.0, min(180.0, t)) for t in servo_targets
+        )
 
-        packet = CommandPacket(servo_target, light_command, flags)
+        # Clamp RGB values
+        rgb_r = max(0, min(255, rgb_r))
+        rgb_g = max(0, min(255, rgb_g))
+        rgb_b = max(0, min(255, rgb_b))
+
+        packet = CommandPacket(
+            clamped_targets, light_command, flags,
+            rgb_r, rgb_g, rgb_b, matrix_left, matrix_right
+        )
         return packet.encode()
 
     def feed(self, data: bytes) -> list[StatusPacket]:

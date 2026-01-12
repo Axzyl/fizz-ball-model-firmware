@@ -17,18 +17,23 @@ typedef struct {
  * Output state for actuators.
  */
 typedef struct {
-    float servo_angle;          // Current servo position (degrees)
-    bool light_on;              // Current light state
-    bool servo_moving;          // True if servo is in motion
+    float servo_angles[NUM_SERVOS];     // Current servo positions (degrees)
+    bool servo_moving[NUM_SERVOS];      // True if servo is in motion
+    bool light_on;                      // Current light state
 } OutputState;
 
 /**
  * Command state received from Raspberry Pi.
  */
 typedef struct {
-    float target_servo_angle;   // Desired servo position (degrees)
+    float target_servo_angles[NUM_SERVOS];  // Desired servo positions (degrees)
     uint8_t light_command;      // LIGHT_CMD_OFF, LIGHT_CMD_ON, or LIGHT_CMD_AUTO
     uint8_t flags;              // Reserved flags
+    uint8_t rgb_r;              // RGB red value (0-255)
+    uint8_t rgb_g;              // RGB green value (0-255)
+    uint8_t rgb_b;              // RGB blue value (0-255)
+    uint8_t matrix_left;        // Left matrix pattern ID
+    uint8_t matrix_right;       // Right matrix pattern ID
     uint32_t last_command_time; // Timestamp of last received command
     bool connected;             // True if receiving commands
 } CommandState;
@@ -59,23 +64,48 @@ void state_init(DeviceState* state);
 void state_update_limit(DeviceState* state, bool limit_active, uint8_t direction);
 
 /**
- * Update command state from received packet.
+ * Update command state from received packet (basic - for backwards compatibility).
  *
  * @param state Pointer to device state
- * @param servo_target Target servo angle
+ * @param servo1_target Target servo 1 angle
+ * @param servo2_target Target servo 2 angle
+ * @param servo3_target Target servo 3 angle
  * @param light_cmd Light command value
  * @param flags Reserved flags
  */
-void state_update_command(DeviceState* state, float servo_target, uint8_t light_cmd, uint8_t flags);
+void state_update_command(DeviceState* state, float servo1_target, float servo2_target,
+                          float servo3_target, uint8_t light_cmd, uint8_t flags);
 
 /**
- * Update output state for servo position.
+ * Update command state from received packet (extended with RGB and matrix).
  *
  * @param state Pointer to device state
+ * @param servo1_target Target servo 1 angle
+ * @param servo2_target Target servo 2 angle
+ * @param servo3_target Target servo 3 angle
+ * @param light_cmd Light command value
+ * @param flags Reserved flags
+ * @param rgb_r RGB red value (0-255)
+ * @param rgb_g RGB green value (0-255)
+ * @param rgb_b RGB blue value (0-255)
+ * @param matrix_left Left matrix pattern ID
+ * @param matrix_right Right matrix pattern ID
+ */
+void state_update_command_extended(DeviceState* state,
+                                   float servo1_target, float servo2_target, float servo3_target,
+                                   uint8_t light_cmd, uint8_t flags,
+                                   uint8_t rgb_r, uint8_t rgb_g, uint8_t rgb_b,
+                                   uint8_t matrix_left, uint8_t matrix_right);
+
+/**
+ * Update output state for a specific servo position.
+ *
+ * @param state Pointer to device state
+ * @param servo_index Servo index (0, 1, or 2)
  * @param angle Current servo angle
  * @param moving True if servo is still moving
  */
-void state_update_servo(DeviceState* state, float angle, bool moving);
+void state_update_servo(DeviceState* state, uint8_t servo_index, float angle, bool moving);
 
 /**
  * Update output state for light.

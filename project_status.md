@@ -1,12 +1,56 @@
 # Project Status
 
-## Current Phase: LED Test Feature
+## Current Phase: Multi-Servo & Peripheral Integration
 
-**Last Updated:** 2026-01-05
+**Last Updated:** 2026-01-10
 
 ---
 
 ## Version History
+
+### v0.2.0 - Multi-Servo & Peripheral Integration (2026-01-10)
+
+**Status:** In Progress
+
+#### Changes
+- Expanded from 1 servo to 3 servos (pins 8, 7, 5)
+- Added RGB LED strip support (pins 27, 14, 12)
+- Added dual MAX7219 LED matrix support (pins 25, 32, 26)
+- Created `pins.h` for centralized pin configuration
+- Fixed PWM timer conflict (RGB channels moved from 3-5 to 4-6)
+- Extended UART protocol for 3 servos + RGB + matrix patterns
+- Updated dashboard to display 3 servo targets/positions
+- All servos move together: 180° when face detected, 0° otherwise
+
+#### Files Added
+- `esp32/include/pins.h` - Hardware pin definitions
+- `esp32/src/rgb_strip.cpp/.h` - RGB LED strip PWM control
+- `esp32/src/led_matrix.cpp/.h` - MAX7219 matrix control
+- `rpi/src/local_config.py` - Machine-specific settings
+
+#### Files Modified
+- `esp32/include/config.h` - PWM channels, 3 servo support
+- `esp32/src/state.cpp/.h` - Arrays for 3 servos
+- `esp32/src/servo_controller.cpp/.h` - Multi-servo support
+- `esp32/src/uart_handler.cpp` - Extended protocol parsing
+- `esp32/src/main.cpp` - Multi-servo update loop
+- `rpi/src/comm/protocol.py` - 3-servo packet format
+- `rpi/src/state.py` - Tuples for 3 servos
+- `rpi/src/comm/uart_comm.py` - Extended protocol support
+- `rpi/src/main.py` - 3-servo control logic
+- `rpi/src/dashboard/dashboard.py` - Reset all servos
+- `rpi/src/dashboard/telemetry_panel.py` - Display 3 servos
+
+#### Technical Details
+- **PWM Timer Fix:** Servo 3 (channel 2) shares Timer 1 with original RGB channel 3. Moving RGB to channels 4-6 avoids timer conflict.
+- **Protocol Format:**
+  - CMD: `$CMD,<s1>,<s2>,<s3>,<light>,<flags>,<r>,<g>,<b>,<ml>,<mr>\n`
+  - STS: `$STS,<limit>,<s1>,<s2>,<s3>,<light>,<flags>,<test>\n`
+
+#### Known Issues Resolved
+- Servo 3 not working → Fixed by resolving PWM timer conflict
+
+---
 
 ### v0.1.3 - LED Blink Test Feature (2026-01-05)
 
@@ -16,22 +60,7 @@
 - Added LED blink test button to dashboard UI
 - Implemented command flag system for special operations
 - ESP32 runs non-blocking LED test state machine
-- Clicking "LED Blink Test" button triggers 5 blinks on ESP32 built-in LED
 - Verifies end-to-end UART communication
-
-#### Files Modified
-- `esp32/include/config.h` - Added `BUILTIN_LED_PIN`, `CMD_FLAG_LED_TEST`, blink timing constants
-- `esp32/src/main.cpp` - Added LED init, `check_led_test()`, `run_led_test()` state machine
-- `rpi/src/config.py` - Added `CMD_FLAG_LED_TEST` constant
-- `rpi/src/state.py` - Added `set_command_flag()`, `clear_command_flag()`, `trigger_led_test()` methods
-- `rpi/src/dashboard/telemetry_panel.py` - Added `ButtonInfo` dataclass, button rendering, click detection
-- `rpi/src/dashboard/dashboard.py` - Added mouse callback, button click handling
-
-#### Technical Details
-- Command flags are transmitted in the UART protocol's flags field
-- ESP32 clears the flag after receiving to prevent re-triggering
-- Non-blocking state machine allows normal operation during test
-- Button click detection uses coordinate transformation from dashboard to panel space
 
 ---
 
@@ -43,23 +72,6 @@
 - Migrated from legacy `mediapipe.solutions` to MediaPipe Tasks API
 - Implemented automatic model downloading (`face_landmarker.task`)
 - Added facial transformation matrix support for improved pose estimation
-- Models stored in `rpi/src/models/` directory (gitignored)
-
-#### Files Modified
-- `rpi/src/vision/face_tracker.py` - Complete rewrite using Tasks API
-- `.gitignore` - Added model file exclusions
-- `CLAUDE.md` - Updated face detection documentation
-
-#### Technical Details
-- Uses `FaceLandmarker` instead of `FaceMesh`
-- Model auto-downloads from Google Storage on first run
-- 478 landmarks (vs 468 in old API)
-- Transformation matrix provides more stable pose estimation
-
-#### Why This Change
-- The legacy `mediapipe.solutions` API throws `AttributeError` on newer MediaPipe versions
-- Tasks API is the current recommended approach
-- Better pose estimation via transformation matrices
 
 ---
 
@@ -71,18 +83,6 @@
 - Added platform detection (Windows, Linux, Raspberry Pi)
 - Implemented Mock UART for testing without ESP32 hardware
 - Added local config override system (`local_config.py`)
-- Platform-specific UART port defaults
-- Updated startup logging to show platform info
-- Added `.gitignore` entries for local config and PlatformIO
-
-#### Files Modified
-- `rpi/src/config.py` - Platform detection, mock UART flag, local config import
-- `rpi/src/comm/uart_comm.py` - MockSerial class, cross-platform error handling
-- `rpi/src/main.py` - Platform info logging at startup
-- `.gitignore` - Added project-specific entries
-
-#### Files Added
-- `rpi/src/local_config.example.py` - Template for machine-specific settings
 
 ---
 
@@ -91,95 +91,66 @@
 **Status:** Complete
 
 #### Completed
-- [x] Project architecture design
-- [x] Directory structure created
-- [x] Documentation files (CLAUDE.md, project_status.md, README.md)
-- [x] UART protocol specification
-- [x] Raspberry Pi code scaffolding
-  - [x] Core modules (main, state, config)
-  - [x] Vision module (face_tracker)
-  - [x] Communication module (uart_comm, protocol)
-  - [x] Dashboard module (dashboard, video_panel, telemetry_panel)
-- [x] ESP32 code scaffolding
-  - [x] Core modules (main, state, config)
-  - [x] Peripheral modules (servo, light, limit_switch)
-  - [x] UART handler
-
-#### Architecture Decisions
-1. **Bidirectional UART**: Added to support limit switch feedback from ESP32 to Pi
-2. **Combined Face Tracker**: Merged angle calculation into face_tracker.py since both use MediaPipe
-3. **Thread-safe State**: Centralized state with mutex lock for multi-threaded access
-4. **OpenCV Dashboard**: Chose OpenCV for simplicity; can upgrade to web-based later
+- Project architecture design
+- Raspberry Pi code scaffolding
+- ESP32 code scaffolding
+- UART protocol specification
+- Documentation
 
 ---
 
 ## Current Status
 
-### What Works (Expected)
+### What Works
 - [x] Cross-platform config detection
-- [x] Mock UART mode for testing without hardware
+- [x] Mock UART mode for testing
 - [x] Local config override system
 - [x] MediaPipe Tasks API integration
-- [x] Automatic model downloading
-- [ ] Camera capture (not yet tested)
-- [ ] Face detection (not yet tested)
-- [ ] Dashboard rendering (not yet tested)
+- [x] ESP32 3-servo PWM control
+- [x] ESP32 RGB LED strip control
+- [x] ESP32 LED matrix control
+- [x] UART protocol (extended format)
+- [x] Dashboard 3-servo display
+- [ ] Face detection → servo control (testing)
+- [ ] End-to-end system test
 
 ### Pending Testing
-- [ ] Run application on Windows with mock UART
-- [ ] Verify MediaPipe face detection works
-- [ ] Test FaceLandmarker model download
-- [ ] Test dashboard UI renders correctly
-- [ ] Test on Raspberry Pi
-- [ ] Test real UART with ESP32
+- [ ] Verify face detection triggers servo movement
+- [ ] Test RGB lighting responds to commands
+- [ ] Test LED matrix patterns
+- [ ] Full system integration test
 
 ### Known Issues
-- None yet
+- None currently
 
 ### Resolved Issues
+- ~~Servo 3 not working~~ - Fixed PWM timer conflict (RGB channels 3→4, 4→5, 5→6)
 - ~~`AttributeError: module 'mediapipe' has no attribute 'solutions'`~~ - Fixed by migrating to Tasks API
+- ~~`'CommandState' object has no attribute 'servo_target'`~~ - Fixed dashboard to use `servo_targets` tuple
 
 ---
 
-## Planned Milestones
+## Hardware Configuration
 
-### v0.2.0 - Basic Functionality
-- [ ] Camera capture verified on Windows
-- [ ] Camera capture verified on Raspberry Pi
-- [ ] Face detection working with MediaPipe
-- [ ] Dashboard displays camera feed
-- [ ] Mock UART testing complete
+### ESP32 Pinout (ESP32-PICO)
 
-### v0.3.0 - Hardware Integration
-- [ ] UART communication with real ESP32
-- [ ] Servo responds to face tracking
-- [ ] Limit switch stops servo at bounds
-- [ ] Lights respond to facing detection
+| GPIO | Function | PWM Channel | Timer |
+|------|----------|-------------|-------|
+| 8 | Servo 1 | 0 | Timer 0 |
+| 7 | Servo 2 | 1 | Timer 0 |
+| 5 | Servo 3 | 2 | Timer 1 |
+| 27 | RGB Red | 4 | Timer 2 |
+| 14 | RGB Green | 5 | Timer 2 |
+| 12 | RGB Blue | 6 | Timer 3 |
+| 25 | Matrix DIN | - | - |
+| 32 | Matrix CLK | - | - |
+| 26 | Matrix CS | - | - |
+| 21 | Limit Switch | - | - |
+| 9 | Test LED | - | - |
 
-### v0.4.0 - Dashboard Complete
-- [ ] Video panel with all overlays
-- [ ] Telemetry panel with live values
-- [ ] Basic operator controls
-- [ ] Keyboard shortcuts working
-
-### v1.0.0 - Production Ready
-- [ ] Robust error handling
-- [ ] Configuration persistence
-- [ ] Performance optimization
-- [ ] Documentation complete
-
----
-
-## Hardware Status
-
-| Component | Status | Notes |
-|-----------|--------|-------|
-| Raspberry Pi | Not tested | Cross-platform code ready |
-| ESP32 | Not tested | Firmware scaffolded |
-| Camera | Not tested | OpenCV capture ready |
-| Servo | Not tested | Need calibration |
-| Limit Switch | Not tested | Need to verify polarity |
-| Lights | Not tested | Placeholder implementation |
+### Connection
+- ESP32 connects to Pi/PC via USB cable
+- USB Serial used for UART protocol (not GPIO UART)
 
 ---
 
@@ -187,70 +158,49 @@
 
 ### Windows (Development)
 - Python 3.10+
-- OpenCV, MediaPipe, pyserial
-- Mock UART available for testing
-- Virtual environment in `rpi/venv/`
+- OpenCV, MediaPipe, pyserial, ultralytics (YOLO)
+- UART port: COM6 (configured in `local_config.py`)
 
 ### Raspberry Pi (Deployment)
 - Python 3.10+
 - Same dependencies
-- Real UART on GPIO pins
+- UART port: `/dev/ttyUSB0` or `/dev/ttyACM0`
 
-### ESP32
-- PlatformIO
-- Arduino framework
-- Build with `pio run`
+### ESP32 (ESP32-PICO)
+- PlatformIO with Arduino framework
+- Libraries: MD_MAX72XX
 
 ---
 
-## Testing Checklist
+## Planned Milestones
 
-### Unit Tests
-- [ ] Protocol packet encoding/decoding
-- [ ] State management thread safety
-- [ ] Angle calculation accuracy
-- [ ] Mock UART behavior
+### v0.2.1 - Integration Testing
+- [ ] Verify face detection → servo movement
+- [ ] Test all peripherals (RGB, matrix)
+- [ ] Performance tuning
 
-### Integration Tests
-- [ ] Pi ↔ ESP32 UART communication
-- [ ] Face detection → Servo movement
-- [ ] Limit switch → Servo stop
+### v0.3.0 - Behavior Refinement
+- [ ] Smooth servo transitions
+- [ ] RGB color presets
+- [ ] Matrix animation patterns
 
-### Platform Tests
-- [ ] Windows with mock UART
-- [ ] Windows with real USB-Serial
-- [ ] Raspberry Pi with GPIO UART
-- [ ] Raspberry Pi with USB-Serial
-
-### Hardware Tests
-- [ ] Camera frame rate
-- [ ] Servo range and speed
-- [ ] Light switching
-- [ ] Limit switch triggering
+### v1.0.0 - Production Ready
+- [ ] Robust error handling
+- [ ] Performance optimization
+- [ ] Documentation complete
 
 ---
 
 ## Notes & Observations
 
-### 2026-01-05 (Update 2)
-- Added cross-platform support for Windows development
-- MockSerial class simulates ESP32 responses realistically
-- Local config system allows machine-specific settings without git conflicts
-- Platform is auto-detected and logged at startup
+### 2026-01-10
+- Fixed PWM timer conflict causing Servo 3 to fail
+- ESP32 LEDC channels share timers in pairs (0-1, 2-3, 4-5, 6-7)
+- Channels sharing a timer must use same frequency/resolution
+- Moving RGB from channels 3-5 to 4-6 resolved the conflict
+- ESP32-PICO allows use of GPIO 5, 7, 8 (unlike standard ESP32-WROOM)
 
-### 2026-01-05 (Update 1)
+### 2026-01-05
 - Initial project scaffold created
-- Architecture designed for extensibility (future features can add to state)
-- Light controller left as placeholder pending hardware details
-- Dashboard designed for monitoring; controls can be added later
-
----
-
-## Future Considerations
-
-1. **Web Dashboard**: Could add Flask + WebSocket for remote monitoring
-2. **Multiple Faces**: Current design tracks single face; could extend to multi-face
-3. **Recording**: Could add video recording with tracking overlay
-4. **Presets**: Could add servo position presets for quick positioning
-5. **Auto-calibration**: Could add limit switch-based servo range calibration
-6. **Configuration UI**: Could add in-dashboard config editing
+- Cross-platform support added for Windows development
+- MediaPipe Tasks API migration completed

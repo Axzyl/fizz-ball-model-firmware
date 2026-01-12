@@ -2,6 +2,9 @@
 
 import platform
 import os
+import logging
+
+_config_logger = logging.getLogger(__name__)
 
 # -----------------------------------------------------------------------------
 # Platform Detection
@@ -18,6 +21,70 @@ def _get_platform_name() -> str:
     return PLATFORM
 
 PLATFORM_NAME = _get_platform_name()
+
+
+def _auto_detect_serial_port() -> str:
+    """
+    Auto-detect ESP32 serial port.
+
+    Looks for common USB-serial chips used by ESP32 boards:
+    - CP210x (Silicon Labs)
+    - CH340/CH341
+    - FTDI
+    - ESP32 native USB CDC
+
+    Returns:
+        Detected port name, or platform default if not found
+    """
+    try:
+        import serial.tools.list_ports
+
+        # Keywords to identify ESP32/USB-serial adapters
+        esp32_keywords = [
+            "CP210",      # Silicon Labs CP210x
+            "CH340",      # WCH CH340
+            "CH341",      # WCH CH341
+            "FTDI",       # FTDI chips
+            "USB Serial", # Generic USB serial
+            "USB-SERIAL", # Generic USB serial
+            "ESP32",      # ESP32 native USB
+            "USB JTAG",   # ESP32-S3/C3 native USB
+        ]
+
+        ports = list(serial.tools.list_ports.comports())
+
+        for port in ports:
+            port_info = f"{port.description} {port.manufacturer or ''} {port.product or ''}"
+            port_info_upper = port_info.upper()
+
+            for keyword in esp32_keywords:
+                if keyword.upper() in port_info_upper:
+                    _config_logger.info(f"Auto-detected serial port: {port.device} ({port.description})")
+                    return port.device
+
+        # If no match found, try first available COM/ttyUSB port
+        for port in ports:
+            if IS_WINDOWS and port.device.startswith("COM"):
+                _config_logger.info(f"Using first available COM port: {port.device}")
+                return port.device
+            elif IS_LINUX and ("ttyUSB" in port.device or "ttyACM" in port.device):
+                _config_logger.info(f"Using first available USB serial port: {port.device}")
+                return port.device
+
+        _config_logger.warning("No serial ports detected, using platform default")
+
+    except ImportError:
+        _config_logger.warning("pyserial not installed, using platform default port")
+    except Exception as e:
+        _config_logger.warning(f"Serial port auto-detection failed: {e}")
+
+    # Fall back to platform defaults
+    if IS_WINDOWS:
+        return "COM3"
+    elif IS_RASPBERRY_PI:
+        return "/dev/ttyUSB0"  # Changed default to USB for ESP32
+    else:
+        return "/dev/ttyUSB0"
 
 # -----------------------------------------------------------------------------
 # Camera Settings
@@ -38,13 +105,8 @@ else:
 # -----------------------------------------------------------------------------
 # UART Settings
 # -----------------------------------------------------------------------------
-# Platform-specific default ports
-if IS_WINDOWS:
-    UART_PORT = "COM3"  # Change to match your USB-Serial adapter
-elif IS_RASPBERRY_PI:
-    UART_PORT = "/dev/ttyS0"  # Pi GPIO UART (pins 14/15)
-else:
-    UART_PORT = "/dev/ttyUSB0"  # Generic Linux USB-Serial
+# Auto-detect serial port (can be overridden in local_config.py)
+UART_PORT = _auto_detect_serial_port()
 
 UART_BAUDRATE = 115200
 UART_TIMEOUT = 0.01  # seconds
@@ -60,6 +122,10 @@ UART_MOCK_ENABLED = False  # Set True to simulate ESP32 responses
 FACE_DETECTION_CONFIDENCE = 0.5
 FACE_TRACKING_CONFIDENCE = 0.5
 MAX_NUM_FACES = 1
+
+# YOLO Face Detection (hybrid mode)
+# Minimum face width as ratio of frame width (reject faces smaller than this)
+MIN_FACE_WIDTH_RATIO = 0.08  # 8% of frame width
 
 # -----------------------------------------------------------------------------
 # Facing Detection
@@ -92,7 +158,7 @@ CMD_FLAG_LED_TEST = 0x01  # Bit 0: Trigger LED blink test on ESP32
 # Dashboard Settings
 # -----------------------------------------------------------------------------
 DASHBOARD_WIDTH = 1024
-DASHBOARD_HEIGHT = 600
+DASHBOARD_HEIGHT = 720  # Increased for RGB and Matrix controls
 DASHBOARD_FPS = 30
 VIDEO_PANEL_WIDTH = 640
 VIDEO_PANEL_HEIGHT = 480

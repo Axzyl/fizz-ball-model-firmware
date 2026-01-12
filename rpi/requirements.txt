@@ -12,3 +12,6 @@ numpy>=1.24.0
 
 # Type hints (development)
 typing-extensions>=4.0.0
+
+# YOLO
+ultralytics>=8.0.0
