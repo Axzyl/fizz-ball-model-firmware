@@ -36,6 +36,21 @@ NPM_CIRCLE = 7        # Circle icon (for ALIVE)
 NPM_X = 8             # X icon (for DEAD)
 
 # =============================================================================
+# Scroll Text IDs (for NPM_SCROLL mode)
+# =============================================================================
+# Pass as npm_letter field when using NPM_SCROLL mode
+SCROLL_SCHRODINGER = '0'   # "SCHRODINGER"
+SCROLL_ALIVE = '1'         # "ALIVE"
+SCROLL_DEAD = '2'          # "DEAD"
+SCROLL_HELLO = '3'         # "HELLO"
+SCROLL_MEOW = '4'          # "MEOW"
+SCROLL_CAT = '5'           # "CAT"
+SCROLL_QUANTUM = '6'       # "QUANTUM"
+SCROLL_BOX = '7'           # "BOX"
+SCROLL_CHEERS = '8'        # "CHEERS"
+SCROLL_DRINK = '9'         # "DRINK"
+
+# =============================================================================
 # NeoPixel Ring Modes - npr_mode values
 # =============================================================================
 NPR_OFF = 0           # Off
@@ -86,29 +101,48 @@ class StateMachineConfig:
 
     def __post_init__(self):
         """Load defaults from config.py if not specified."""
+        # Tracking settings
         if self.tracking_velocity_gain is None:
             self.tracking_velocity_gain = getattr(config, 'TRACKING_VELOCITY_GAIN', 0.15)
         if self.tracking_deadzone is None:
             self.tracking_deadzone = getattr(config, 'TRACKING_DEADZONE', 0.05)
         if self.tracking_max_velocity is None:
             self.tracking_max_velocity = getattr(config, 'TRACKING_MAX_VELOCITY', 5.0)
+        # Pour/dispensing settings
+        if self.alive_pour_duration is None:
+            self.alive_pour_duration = getattr(config, 'POUR_DURATION', 3.0)
+        if self.dead_partial_pour_ratio is None:
+            self.dead_partial_pour_ratio = getattr(config, 'POUR_PARTIAL_RATIO', 0.35)
+        if self.dead_final_pour_ratio is None:
+            self.dead_final_pour_ratio = getattr(config, 'POUR_FINAL_RATIO', 0.65)
+        # State durations
+        if self.collapse_duration is None:
+            self.collapse_duration = getattr(config, 'COLLAPSE_DURATION', 3.0)
+        if self.reset_duration is None:
+            self.reset_duration = getattr(config, 'RESET_DURATION', 2.0)
+        if self.dead_tension_duration is None:
+            self.dead_tension_duration = getattr(config, 'DEAD_TENSION_DURATION', 3.0)
+        if self.dead_chaos_duration is None:
+            self.dead_chaos_duration = getattr(config, 'DEAD_CHAOS_DURATION', 2.0)
+        if self.dead_darkness_duration is None:
+            self.dead_darkness_duration = getattr(config, 'DEAD_DARKNESS_DURATION', 1.0)
 
     # Idle behavior
     idle_arm_position: float = 90.0  # Arm position when idle
     idle_base_position: float = 90.0  # Base position when idle
     idle_return_speed: float = 2.0  # Speed of return to center
 
-    # State durations
-    collapse_duration: float = 3.0  # Duration of collapse animation
-    alive_pour_duration: float = 3.0  # How long to pour (alive outcome)
-    reset_duration: float = 2.0  # How long reset takes
+    # State durations (loaded from config.py in __post_init__)
+    collapse_duration: float = None  # Duration of collapse animation
+    alive_pour_duration: float = None  # How long to pour (alive outcome)
+    reset_duration: float = None  # How long reset takes
 
-    # DEAD state sub-step durations
-    dead_tension_duration: float = 3.0  # Step 1: tension buildup
-    dead_partial_pour_ratio: float = 0.35  # Step 2: 35% of total pour
-    dead_chaos_duration: float = 2.0  # Step 3: violent shaking
-    dead_darkness_duration: float = 1.0  # Step 4: all LEDs off
-    dead_final_pour_ratio: float = 0.65  # Step 5: remaining 65%
+    # DEAD state sub-step durations (loaded from config.py in __post_init__)
+    dead_tension_duration: float = None  # Step 1: tension buildup
+    dead_partial_pour_ratio: float = None  # Step 2: fraction of total pour
+    dead_chaos_duration: float = None  # Step 3: violent shaking
+    dead_darkness_duration: float = None  # Step 4: all LEDs off
+    dead_final_pour_ratio: float = None  # Step 5: remaining fraction
 
     # Chaos shake parameters
     chaos_shake_speed: float = 15.0  # Degrees per tick
@@ -328,7 +362,7 @@ class StateMachine:
         - Arm servo: Move to 90°
         - Valve: Force closed
         - LED ring: Off or very dim
-        - 5×5 matrix: Closed eye icon
+        - 5×5 matrix: Scroll "SCHRODINGER"
         - RGB strip: Off or very dim
         """
 
@@ -343,19 +377,12 @@ class StateMachine:
             move = min(self.config.idle_return_speed, abs(diff))
             self.tracking_base_position += move if diff > 0 else -move
 
-        # Spec: LED Ring off, 5x5 Matrix closed eye, RGB Strip off
+        # All lights off except scrolling matrix (purple/blue)
         return self._make_commands(
-            servo_target_2=self.config.idle_arm_position,  # Arm at 90°
-            servo_target_1=self.tracking_base_position,    # Moving toward 90°
+            servo_target_2=self.config.idle_arm_position,
+            servo_target_1=self.tracking_base_position,
             valve_open=False,
-            rgb_mode=RGB_SOLID,
-            rgb_r=0, rgb_g=0, rgb_b=0,  # Off
-            npm_mode=NPM_EYE_CLOSED,  # Closed eye icon
-            npm_r=100, npm_g=100, npm_b=100,  # Dim white for eye
-            npr_mode=NPR_OFF,  # Off
-            npr_r=0, npr_g=0, npr_b=0,
-            matrix_left=1,  # Circle
-            matrix_right=1,  # Circle
+            npm_r=100, npm_g=0, npm_b=255,  # Purple/blue matrix
         )
 
     def _tick_tracking(self, face: FaceState, esp: EspState) -> dict:
@@ -414,19 +441,12 @@ class StateMachine:
         else:
             self._limit_held_start = 0
 
-        # Spec: LED Ring bright blue/purple, 5x5 Matrix open eye, RGB Strip blue/purple
+        # All lights off except scrolling matrix (brighter purple/blue)
         return self._make_commands(
             servo_target_2=arm_position,
             servo_target_1=self.tracking_base_position,
             valve_open=False,
-            rgb_mode=RGB_SOLID,
-            rgb_r=80, rgb_g=0, rgb_b=255,  # Blue/purple
-            npm_mode=NPM_EYE_OPEN,  # Open eye icon
-            npm_r=80, npm_g=0, npm_b=255,  # Blue/purple
-            npr_mode=NPR_CHASE,  # Chase animation (active observation)
-            npr_r=80, npr_g=0, npr_b=255,  # Blue/purple
-            matrix_left=1,  # Circle
-            matrix_right=1,  # Circle
+            npm_r=150, npm_g=0, npm_b=255,  # Brighter purple/blue matrix
         )
 
     def _tick_collapse(self, face: FaceState, esp: EspState) -> dict:
@@ -450,16 +470,12 @@ class StateMachine:
                 self._transition_to(State.DEAD)
                 return self._tick_dead(face, esp)
 
-        # Spec: LED Ring rainbow, 5x5 Matrix neutral/glitch, RGB Strip rainbow
+        # All lights off except scrolling matrix (white)
         return self._make_commands(
-            servo_target_2=self.config.collapse_arm_position,  # 45° forward
-            servo_target_1=self._collapse_base_position,  # Hold position
+            servo_target_2=self.config.collapse_arm_position,
+            servo_target_1=self._collapse_base_position,
             valve_open=False,
-            rgb_mode=RGB_RAINBOW,  # Rainbow cycle
-            npm_mode=NPM_RAINBOW,  # Rainbow (neutral/glitch pattern)
-            npr_mode=NPR_RAINBOW,  # Rainbow cycle
-            matrix_left=1,  # Circle
-            matrix_right=2,  # X (alternating for suspense)
+            npm_r=255, npm_g=255, npm_b=255,  # White matrix
         )
 
     def _tick_alive(self, face: FaceState, esp: EspState) -> dict:
@@ -470,7 +486,7 @@ class StateMachine:
         - Arm servo: Friendly motion or idle
         - Valve: Open for 100% pour duration
         - LED ring: Solid green or gentle pulse
-        - 5×5 matrix: Green circle icon
+        - 5×5 matrix: Scroll "CHEERS"
         - RGB strip: Solid green
         """
 
@@ -488,19 +504,12 @@ class StateMachine:
         # Dispense if enabled
         should_dispense = self.dispensing_enabled
 
-        # Spec: LED Ring solid green/pulse, 5x5 Matrix green circle, RGB Strip solid green
+        # All lights off except scrolling matrix (green)
         return self._make_commands(
-            servo_target_2=100.0,  # Arm slightly up (friendly)
-            servo_target_1=self.tracking_base_position,  # Slowly returning to 90
+            servo_target_2=100.0,
+            servo_target_1=self.tracking_base_position,
             valve_open=should_dispense,
-            rgb_mode=RGB_SOLID,
-            rgb_r=0, rgb_g=255, rgb_b=0,  # Solid green
-            npm_mode=NPM_CIRCLE,  # Green circle icon
-            npm_r=0, npm_g=255, npm_b=0,  # Green
-            npr_mode=NPR_BREATHE,  # Gentle pulse
-            npr_r=0, npr_g=255, npr_b=0,  # Green
-            matrix_left=1,  # Circle
-            matrix_right=1,  # Circle
+            npm_r=0, npm_g=255, npm_b=0,  # Green matrix
         )
 
     def _tick_dead(self, face: FaceState, esp: EspState) -> dict:
@@ -521,29 +530,21 @@ class StateMachine:
         partial_pour_time = total_pour_time * self.config.dead_partial_pour_ratio
         final_pour_time = total_pour_time * self.config.dead_final_pour_ratio
 
-        # Process current sub-state
-        # Spec: 5x5 Matrix shows "Red X icon (static)" throughout DEAD state
+        # Process current sub-state - only matrix scrolls, other lights off
         if self._dead_sub_state == DeadSubState.TENSION:
-            # Step 1: Tension - solid red LEDs, hold position (~3s)
+            # Step 1: Tension - hold position (~3s)
             if time_in_sub >= self.config.dead_tension_duration:
                 self._advance_dead_substate()
 
             return self._make_commands(
-                servo_target_2=90.0,  # Hold
-                servo_target_1=self._collapse_base_position,  # Hold
+                servo_target_2=90.0,
+                servo_target_1=self._collapse_base_position,
                 valve_open=False,
-                rgb_mode=RGB_SOLID,
-                rgb_r=255, rgb_g=0, rgb_b=0,  # Solid red
-                npm_mode=NPM_X,  # Red X icon
-                npm_r=255, npm_g=0, npm_b=0,  # Red
-                npr_mode=NPR_SOLID,  # Solid red
-                npr_r=255, npr_g=0, npr_b=0,
-                matrix_left=2,  # X
-                matrix_right=2,  # X
+                npm_r=255, npm_g=0, npm_b=0,  # Red matrix
             )
 
         elif self._dead_sub_state == DeadSubState.PARTIAL_POUR:
-            # Step 2: Partial pour - valve open 35%, lights remain red
+            # Step 2: Partial pour - valve open 35%
             if time_in_sub >= partial_pour_time:
                 self._advance_dead_substate()
 
@@ -553,18 +554,11 @@ class StateMachine:
                 servo_target_2=90.0,
                 servo_target_1=self._collapse_base_position,
                 valve_open=should_dispense,
-                rgb_mode=RGB_SOLID,
-                rgb_r=255, rgb_g=0, rgb_b=0,  # Solid red
-                npm_mode=NPM_X,  # Red X icon
-                npm_r=255, npm_g=0, npm_b=0,
-                npr_mode=NPR_SOLID,
-                npr_r=255, npr_g=0, npr_b=0,
-                matrix_left=2,
-                matrix_right=2,
+                npm_r=255, npm_g=0, npm_b=0,  # Red matrix
             )
 
         elif self._dead_sub_state == DeadSubState.CHAOS:
-            # Step 3: Chaos - violent shaking, red flicker (~2s)
+            # Step 3: Chaos - violent shaking, matrix flicker (~2s)
             if time_in_sub >= self.config.dead_chaos_duration:
                 self._advance_dead_substate()
 
@@ -573,21 +567,14 @@ class StateMachine:
             flicker_brightness = 255 if flicker_on else 30
 
             return self._make_commands(
-                servo_target_2=90.0 + shake,  # Shake arm
-                servo_target_1=self._collapse_base_position + shake * 0.5,  # Shake base
+                servo_target_2=90.0 + shake,
+                servo_target_1=self._collapse_base_position + shake * 0.5,
                 valve_open=False,
-                rgb_mode=RGB_SOLID,
-                rgb_r=flicker_brightness, rgb_g=0, rgb_b=0,  # Red flicker
-                npm_mode=NPM_X,  # Red X icon (flickering)
-                npm_r=flicker_brightness, npm_g=0, npm_b=0,
-                npr_mode=NPR_SOLID,
-                npr_r=flicker_brightness, npr_g=0, npr_b=0,
-                matrix_left=2,
-                matrix_right=2,
+                npm_r=flicker_brightness, npm_g=0, npm_b=0,  # Flickering red matrix
             )
 
         elif self._dead_sub_state == DeadSubState.DARKNESS:
-            # Step 4: Darkness - all LEDs off, brief pause (~1s)
+            # Step 4: Darkness - ALL lights off including matrix (~1s)
             if time_in_sub >= self.config.dead_darkness_duration:
                 self._advance_dead_substate()
 
@@ -595,16 +582,12 @@ class StateMachine:
                 servo_target_2=90.0,
                 servo_target_1=self._collapse_base_position,
                 valve_open=False,
-                rgb_mode=RGB_SOLID,
-                rgb_r=0, rgb_g=0, rgb_b=0,  # Off
-                npm_mode=NPM_OFF,  # Off
-                npr_mode=NPR_OFF,  # Off
-                matrix_left=0,  # Off
-                matrix_right=0,  # Off
+                npm_mode=NPM_OFF,  # Matrix off too
+                npm_r=0, npm_g=0, npm_b=0,
             )
 
         elif self._dead_sub_state == DeadSubState.FINAL_POUR:
-            # Step 5: Final pour - valve open 65%, LEDs off or minimal
+            # Step 5: Final pour - valve open 65%
             if time_in_sub >= final_pour_time or self._skip_requested:
                 self._transition_to(State.RESET)
                 return self._tick_reset(face, esp)
@@ -615,13 +598,7 @@ class StateMachine:
                 servo_target_2=90.0,
                 servo_target_1=self._collapse_base_position,
                 valve_open=should_dispense,
-                rgb_mode=RGB_SOLID,
-                rgb_r=0, rgb_g=0, rgb_b=0,  # Off (spec: off or minimal)
-                npm_mode=NPM_X,  # Keep X visible but dim
-                npm_r=30, npm_g=0, npm_b=0,  # Very dim red
-                npr_mode=NPR_OFF,  # Off
-                matrix_left=2,
-                matrix_right=2,
+                npm_r=30, npm_g=0, npm_b=0,  # Very dim red matrix
             )
 
         # Fallback
@@ -758,17 +735,17 @@ class StateMachine:
         rgb_r: int = 0,
         rgb_g: int = 0,
         rgb_b: int = 0,
-        npm_mode: int = 0,
-        npm_letter: str = "A",
+        npm_mode: int = NPM_SCROLL,  # Matrix scrolls by default
+        npm_letter: str = "0",
         npm_r: int = 255,
         npm_g: int = 255,
         npm_b: int = 255,
-        npr_mode: int = 0,
-        npr_r: int = 255,
-        npr_g: int = 255,
-        npr_b: int = 255,
-        matrix_left: int = 1,
-        matrix_right: int = 2,
+        npr_mode: int = 0,  # Ring off by default
+        npr_r: int = 0,
+        npr_g: int = 0,
+        npr_b: int = 0,
+        matrix_left: int = 0,  # MAX7219 off by default
+        matrix_right: int = 0,
     ) -> dict:
         """Create command dictionary."""
         return {

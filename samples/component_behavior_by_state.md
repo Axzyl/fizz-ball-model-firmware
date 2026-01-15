@@ -57,15 +57,15 @@ This is a **low-level execution contract**, not a narrative description.
 
 ### LED Ring
 
-- Off or very dim idle glow
+- Very dim idle glow, purple with slow blue pulses
 
 ### 5×5 Matrix
 
-- Closed eye icon (static)
+- Closed eye icon (static), purple with slow blue pulses
 
 ### RGB Strip
 
-- Off or extremely dim ambient
+- = Dim ambient, purple with slow blue pulses
 
 ---
 

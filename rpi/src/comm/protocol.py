@@ -8,11 +8,13 @@ Multi-message protocol format:
 - $NPM,<mode>,<letter>,<r>,<g>,<b> - NeoPixel matrix (sent on change)
 - $NPR,<mode>,<r>,<g>,<b>          - NeoPixel ring (sent on change)
 - $FLG,<flags>                     - Command flags (sent on change)
-- $VLV,<open>                      - Valve command: 0=close, 1=open
-- $EST,<enable>                    - Emergency stop: 0=disable, 1=enable
+- $VLV,<open>                      - Valve command: 0=close, 1=open (auto-closes after 5s)
 
 Status from ESP32:
 - $STS,<limit>,<s1>,<s2>,<s3>,<light>,<flags>,<test>,<valve_open>,<valve_enabled>,<valve_ms>
+
+Note: Valve is simplified - just open/close commands. Auto-closes after 5 seconds.
+      Emergency stop ($EST) command is deprecated and ignored by ESP32.
 """
 
 from __future__ import annotations
@@ -30,11 +32,24 @@ NUM_SERVOS = 3
 # NeoPixel Matrix modes
 NPM_MODE_OFF = 0        # All LEDs off
 NPM_MODE_LETTER = 1     # Display a single letter
-NPM_MODE_SCROLL = 2     # Scroll text across matrix
+NPM_MODE_SCROLL = 2     # Scroll text across matrix (use SCROLL_TEXT_* constants)
 NPM_MODE_RAINBOW = 3    # Rainbow animation
 NPM_MODE_SOLID = 4      # Solid color fill
 NPM_MODE_EYE_CLOSED = 5 # Closed eye pattern (sleeping)
 NPM_MODE_EYE_OPEN = 6   # Open eye pattern (alert)
+
+# Scroll text IDs (for NPM_MODE_SCROLL)
+# Pass as letter field: '0' for SCHRODINGER, '1' for ALIVE, etc.
+SCROLL_TEXT_SCHRODINGER = '0'   # "SCHRODINGER"
+SCROLL_TEXT_ALIVE = '1'         # "ALIVE"
+SCROLL_TEXT_DEAD = '2'          # "DEAD"
+SCROLL_TEXT_HELLO = '3'         # "HELLO"
+SCROLL_TEXT_MEOW = '4'          # "MEOW"
+SCROLL_TEXT_CAT = '5'           # "CAT"
+SCROLL_TEXT_QUANTUM = '6'       # "QUANTUM"
+SCROLL_TEXT_BOX = '7'           # "BOX"
+SCROLL_TEXT_CHEERS = '8'        # "CHEERS"
+SCROLL_TEXT_DRINK = '9'         # "DRINK"
 
 # NeoPixel Ring modes
 NPR_MODE_OFF = 0      # All LEDs off
@@ -284,6 +299,9 @@ class Protocol:
     def create_estop_message(self, enable: bool) -> bytes:
         """
         Create emergency stop message.
+
+        DEPRECATED: This command is ignored by ESP32. Valve is always enabled.
+        Kept for API compatibility only.
 
         Args:
             enable: True to enable valve operation, False to disable (emergency stop)

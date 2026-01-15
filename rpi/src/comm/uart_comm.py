@@ -39,7 +39,6 @@ class LastSentState:
     npr_g: int = -1
     npr_b: int = -1
     valve_open: bool = False
-    estop_enable: bool = True
     flags: int = -1
 
 
@@ -114,13 +113,7 @@ class MockSerial:
                     if self._valve_open:
                         self._valve_ms = 0  # Reset timer on open
 
-            elif line.startswith("$EST,"):
-                # Emergency stop: $EST,<enable>
-                parts = line[5:].split(",")
-                if len(parts) >= 1:
-                    self._valve_enabled = int(parts[0])
-                    if not self._valve_enabled:
-                        self._valve_open = 0  # Force valve closed
+            # Note: $EST (emergency stop) command removed - valve is always enabled
 
         except Exception:
             pass
@@ -540,21 +533,13 @@ class UartComm(threading.Thread):
             last.npr_b = command.npr_b
             logger.debug(f"TX NPR: mode={command.npr_mode}, ({command.npr_r},{command.npr_g},{command.npr_b})")
 
-        # Valve
+        # Valve (simplified: just open/close, no estop)
         if command.valve_open != last.valve_open:
             packet = self.protocol.create_valve_message(command.valve_open)
             self.serial.write(packet)
             self.state.increment_uart_tx(packet.decode("ascii"))
             last.valve_open = command.valve_open
             logger.debug(f"TX VLV: {command.valve_open}")
-
-        # Emergency stop
-        if command.estop_enable != last.estop_enable:
-            packet = self.protocol.create_estop_message(command.estop_enable)
-            self.serial.write(packet)
-            self.state.increment_uart_tx(packet.decode("ascii"))
-            last.estop_enable = command.estop_enable
-            logger.debug(f"TX EST: {command.estop_enable}")
 
         # Flags (for LED test, etc.)
         if command.flags != last.flags:

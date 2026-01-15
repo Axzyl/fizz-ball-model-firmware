@@ -36,6 +36,11 @@
 #define SERVO_MIN_PULSE_US  500     // 0 degrees
 #define SERVO_MAX_PULSE_US  2500    // 180 degrees
 
+// Valve servo settings (Servo 3 = index 2)
+#define VALVE_SERVO_INDEX   2       // Servo index for valve control
+#define VALVE_CLOSED_ANGLE  0.0f    // Valve closed position
+#define VALVE_OPEN_ANGLE    180.0f  // Valve open position
+
 // =============================================================================
 // RGB Strip Settings
 // =============================================================================

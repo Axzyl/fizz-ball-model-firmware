@@ -3,7 +3,7 @@
 void valve_safety_init(ValveState* state) {
     state->commanded_open = false;
     state->actual_open = false;
-    state->enabled = true;  // Start enabled
+    state->enabled = true;  // Always enabled (simplified)
     state->open_start_time = 0;
     state->total_open_ms = 0;
     state->last_close_time = 0;
@@ -15,29 +15,14 @@ void valve_safety_set_command(ValveState* state, bool open) {
 }
 
 void valve_safety_set_enabled(ValveState* state, bool enabled) {
-    state->enabled = enabled;
-
-    // If disabling (emergency stop), force valve closed
-    if (!enabled && state->actual_open) {
-        state->actual_open = false;
-        state->last_close_time = millis();
-        DEBUG_PRINTLN("Emergency stop - valve forced closed");
-    }
+    // Simplified: always enabled, this function kept for API compatibility
+    state->enabled = true;
 }
 
 bool valve_safety_update(ValveState* state, bool connected) {
     uint32_t now = millis();
 
-    // Safety check 1: Emergency stop active
-    if (!state->enabled) {
-        if (state->actual_open) {
-            state->actual_open = false;
-            state->last_close_time = now;
-        }
-        return false;
-    }
-
-    // Safety check 2: Connection lost - close valve
+    // Safety check 1: Connection lost - close valve
     if (!connected) {
         if (state->actual_open) {
             state->actual_open = false;
@@ -47,14 +32,15 @@ bool valve_safety_update(ValveState* state, bool connected) {
         return false;
     }
 
-    // Safety check 3: Maximum open time
+    // Safety check 2: Auto-close after max open time (5 seconds)
     if (state->actual_open) {
         uint32_t open_duration = now - state->open_start_time;
         if (open_duration >= VALVE_MAX_OPEN_MS) {
             state->actual_open = false;
             state->last_close_time = now;
             state->safety_triggered = true;
-            DEBUG_PRINTLN("Valve timeout - forced closed");
+            state->commanded_open = false;  // Reset command so it doesn't reopen
+            DEBUG_PRINTLN("Valve auto-closed after 5 seconds");
             return false;
         }
         state->total_open_ms = open_duration;
@@ -62,13 +48,11 @@ bool valve_safety_update(ValveState* state, bool connected) {
 
     // Handle commanded state changes
     if (state->commanded_open && !state->actual_open) {
-        // Want to open
-        // Check cooldown period
+        // Want to open - check cooldown
         if (state->last_close_time > 0) {
             uint32_t since_close = now - state->last_close_time;
             if (since_close < VALVE_COOLDOWN_MS) {
-                // Still in cooldown, don't open yet
-                return false;
+                return false;  // Still in cooldown
             }
         }
 

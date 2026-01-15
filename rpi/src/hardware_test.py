@@ -42,6 +42,8 @@ class HardwareTestUI:
         self.serial_port = None
         self.serial_thread = None
         self.running = False
+        self.heartbeat_id = None  # Timer ID for heartbeat
+        self.synced_with_esp = False  # Wait for first status before sending commands
 
         # Status data from ESP32
         self.status = {
@@ -83,14 +85,14 @@ class HardwareTestUI:
         servo_frame.pack(fill=tk.X, pady=(0, 10))
 
         self.servo_vars = []
-        servo_labels = ["Base (S1)", "Arm (S2)", "Valve (S3)"]
+        servo_labels = ["Base (S1)", "Arm (S2)"]  # Valve controlled separately
         for i, label in enumerate(servo_labels):
             row = ttk.Frame(servo_frame)
             row.pack(fill=tk.X, pady=2)
 
             ttk.Label(row, text=f"{label}:", width=12).pack(side=tk.LEFT)
 
-            var = tk.DoubleVar(value=90.0)
+            var = tk.DoubleVar(value=90.0)  # Default to 90 (center position)
             self.servo_vars.append(var)
 
             scale = ttk.Scale(row, from_=0, to=180, variable=var, orient=tk.HORIZONTAL, length=400,
@@ -138,17 +140,26 @@ class HardwareTestUI:
             scale.pack(side=tk.LEFT)
             scale.bind("<ButtonRelease-1>", lambda e: self._send_rgb())
 
-        # Valve controls
-        valve_frame = ttk.LabelFrame(mid_row, text="Valve", padding="5")
+        # Valve controls (simplified: just open/close buttons)
+        valve_frame = ttk.LabelFrame(mid_row, text="Valve (auto-closes after 5s)", padding="5")
         valve_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0))
 
-        self.valve_enabled = tk.IntVar(value=0)
-        ttk.Checkbutton(valve_frame, text="Enable (E-Stop)", variable=self.valve_enabled,
-                       command=self._send_estop).pack(anchor=tk.W)
+        valve_btn_row = ttk.Frame(valve_frame)
+        valve_btn_row.pack(fill=tk.X, pady=5)
 
-        self.valve_open = tk.IntVar(value=0)
-        ttk.Checkbutton(valve_frame, text="Open Valve", variable=self.valve_open,
-                       command=self._send_valve).pack(anchor=tk.W)
+        # Track commanded valve state (what we last sent)
+        self.valve_commanded = False
+
+        self.valve_open_btn = ttk.Button(valve_btn_row, text="OPEN", width=10,
+                                         command=self._valve_open)
+        self.valve_open_btn.pack(side=tk.LEFT, padx=5)
+
+        self.valve_close_btn = ttk.Button(valve_btn_row, text="CLOSE", width=10,
+                                          command=self._valve_close)
+        self.valve_close_btn.pack(side=tk.LEFT, padx=5)
+
+        self.valve_status = ttk.Label(valve_frame, text="CLOSED", font=("Consolas", 12, "bold"))
+        self.valve_status.pack(pady=5)
 
         # === LED Matrix Frame ===
         matrix_frame = ttk.LabelFrame(main, text="LED Matrix (MAX7219)", padding="5")
@@ -308,10 +319,19 @@ class HardwareTestUI:
 
             self.connect_btn.config(text="Disconnect")
             self.status_label.config(text=f"Connected to {port}", foreground="green")
+
+            # Reset valve state and ensure valve is closed on connect
+            self.valve_commanded = False
+            self.synced_with_esp = False  # Wait for first status to sync sliders
+            self._send("$VLV,0")
+
+            # Start heartbeat to keep ESP32 connection alive
+            self._start_heartbeat()
         except Exception as e:
             self._log(f"Connection error: {e}")
 
     def _disconnect(self):
+        self._stop_heartbeat()
         self.running = False
         if self.serial_thread:
             self.serial_thread.join(timeout=1)
@@ -321,6 +341,23 @@ class HardwareTestUI:
 
         self.connect_btn.config(text="Connect")
         self.status_label.config(text="Disconnected", foreground="red")
+
+    def _start_heartbeat(self):
+        """Start periodic heartbeat to keep ESP32 connection alive."""
+        def heartbeat():
+            if self.running and self.serial_port and self.serial_port.is_open:
+                # Only send servo commands after syncing with ESP32's actual positions
+                if self.synced_with_esp:
+                    self._send_servos()
+                self.heartbeat_id = self.root.after(200, heartbeat)  # 5Hz heartbeat
+
+        self.heartbeat_id = self.root.after(200, heartbeat)
+
+    def _stop_heartbeat(self):
+        """Stop the heartbeat timer."""
+        if self.heartbeat_id:
+            self.root.after_cancel(self.heartbeat_id)
+            self.heartbeat_id = None
 
     def _serial_reader(self):
         while self.running and self.serial_port:
@@ -358,13 +395,26 @@ class HardwareTestUI:
         limit_str = ["CLEAR", "CW", "CCW"][s['limit']] if s['limit'] < 3 else "?"
         moving = "MOVING" if s['flags'] & 0x01 else "IDLE"
 
+        # On first status, sync sliders with ESP32's actual positions (prevents servo jump)
+        if not self.synced_with_esp:
+            self.servo_vars[0].set(s['servo1'])  # Base
+            self.servo_vars[1].set(s['servo2'])  # Arm
+            # Valve (servo3) is controlled via $VLV, not slider
+            self.synced_with_esp = True
+
+        # Update valve status label and sync commanded state
+        if s['valve_open']:
+            self.valve_status.config(text=f"OPEN ({s['valve_ms']}ms)", foreground="red")
+        else:
+            self.valve_status.config(text="CLOSED", foreground="green")
+            # Reset commanded state when ESP32 reports closed (e.g., after auto-close)
+            # This allows user to click Open again
+            self.valve_commanded = False
+
         text = (
             f"Servos:  Base={s['servo1']:.1f}  Arm={s['servo2']:.1f}  Valve={s['servo3']:.1f}  [{moving}]\n"
             f"Limit:   {limit_str}\n"
             f"Light:   {'ON' if s['light'] else 'OFF'}\n"
-            f"Valve:   {'OPEN' if s['valve_open'] else 'CLOSED'}  "
-            f"Enabled={'YES' if s['valve_enabled'] else 'NO'}  "
-            f"Time={s['valve_ms']}ms\n"
             f"Test:    {'ACTIVE' if s['test'] else 'idle'}\n"
         )
 
@@ -393,8 +443,8 @@ class HardwareTestUI:
     def _send_servos(self):
         s1 = self.servo_vars[0].get()
         s2 = self.servo_vars[1].get()
-        s3 = self.servo_vars[2].get()
-        self._send(f"$SRV,{s1:.1f},{s2:.1f},{s3:.1f}")
+        # Servo 3 (valve) controlled separately via $VLV command
+        self._send(f"$SRV,{s1:.1f},{s2:.1f},0.0")
 
     def _send_light(self):
         self._send(f"$LGT,{self.light_var.get()}")
@@ -442,16 +492,22 @@ class HardwareTestUI:
         self.npr_b.set(b)
         self._send_npr()
 
-    def _send_valve(self):
-        self._send(f"$VLV,{self.valve_open.get()}")
+    def _valve_open(self):
+        """Send valve open command (only if not already commanded open)."""
+        if not self.valve_commanded:
+            self._send("$VLV,1")
+            self.valve_commanded = True
 
-    def _send_estop(self):
-        self._send(f"$EST,{self.valve_enabled.get()}")
+    def _valve_close(self):
+        """Send valve close command and reset commanded state."""
+        self._send("$VLV,0")
+        self.valve_commanded = False
 
     def _send_led_test(self):
         self._send("$FLG,1")
 
     def _all_servos(self, angle):
+        # Only sets Base and Arm servos (not valve)
         for var in self.servo_vars:
             var.set(angle)
         self._send_servos()
@@ -463,6 +519,7 @@ class HardwareTestUI:
         self._send("$NPM,0,A,0,0,0")
         self._send("$NPR,0,0,0,0")
         self._send("$VLV,0")
+        self.valve_commanded = False
 
     def on_close(self):
         self._disconnect()

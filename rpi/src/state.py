@@ -134,9 +134,8 @@ class CommandState:
     npr_r: int = 255
     npr_g: int = 255
     npr_b: int = 255
-    # Valve control
+    # Valve control (simplified: just open/close, auto-closes after 5s)
     valve_open: bool = False
-    estop_enable: bool = True  # False = emergency stop active
 
 
 @dataclass
@@ -341,7 +340,6 @@ class AppState:
         npr_g: Optional[int] = None,
         npr_b: Optional[int] = None,
         valve_open: Optional[bool] = None,
-        estop_enable: Optional[bool] = None,
     ) -> None:
         """Thread-safe command update."""
         with self._lock:
@@ -393,8 +391,6 @@ class AppState:
                 self._command.npr_b = npr_b
             if valve_open is not None:
                 self._command.valve_open = valve_open
-            if estop_enable is not None:
-                self._command.estop_enable = estop_enable
 
     def get_command(self) -> CommandState:
         """Thread-safe command retrieval (returns copy)."""
@@ -419,7 +415,6 @@ class AppState:
                 npr_g=self._command.npr_g,
                 npr_b=self._command.npr_b,
                 valve_open=self._command.valve_open,
-                estop_enable=self._command.estop_enable,
             )
 
     def set_command_flag(self, flag: int) -> None:
@@ -561,7 +556,6 @@ class AppState:
                 npr_g=self._command.npr_g,
                 npr_b=self._command.npr_b,
                 valve_open=self._command.valve_open,
-                estop_enable=self._command.estop_enable,
             )
 
             self._system.update_uptime()

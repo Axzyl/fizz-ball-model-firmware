@@ -14,8 +14,8 @@
 // =============================================================================
 
 // Valve safety settings
-#define VALVE_MAX_OPEN_MS       10000   // Maximum valve open time (10 seconds)
-#define VALVE_COOLDOWN_MS       2000    // Minimum time between pours (2 seconds)
+#define VALVE_MAX_OPEN_MS       5000    // Auto-close after 5 seconds
+#define VALVE_COOLDOWN_MS       500     // Minimum time between pours (0.5 seconds)
 #define VALVE_PULSE_MIN_MS      100     // Minimum pulse duration
 
 // Valve state structure

@@ -1,5 +1,6 @@
 #include "uart_handler.h"
 #include "config.h"
+#include "valve_safety.h"
 
 // Use USB Serial for protocol communication
 #define PiSerial Serial
@@ -10,6 +11,9 @@ static size_t rx_index = 0;
 
 // External function to notify command received (defined in main.cpp)
 extern void on_command_received();
+
+// External valve state (defined in main.cpp)
+extern ValveState g_valve_state;
 
 // External functions for valve state (defined in main.cpp)
 extern bool get_valve_open();
@@ -190,7 +194,11 @@ static bool parse_valve_packet(const char* buffer, DeviceState* state) {
         return false;
     }
 
-    state->command.valve_open = (open != 0);
+    bool should_open = (open != 0);
+    state->command.valve_open = should_open;
+
+    // Set valve command in safety module (this is the only place it should be set)
+    valve_safety_set_command(&g_valve_state, should_open);
 
     DEBUG_PRINTF("VLV: %d\n", open);
     return true;

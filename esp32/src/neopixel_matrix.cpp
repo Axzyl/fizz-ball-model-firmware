@@ -1,4 +1,6 @@
 #include "neopixel_matrix.h"
+#include "scroll_texts.h"
+#include <string.h>
 
 // NeoPixel strip object
 static Adafruit_NeoPixel* npm_strip = nullptr;
@@ -86,11 +88,11 @@ void npm_init(uint8_t pin) {
 }
 
 void npm_state_init(NpmState* state) {
-    state->mode = NPM_MODE_OFF;
+    state->mode = NPM_MODE_OFF;  // Default to OFF
     state->letter = 'A';
-    state->r = 255;
-    state->g = 255;
-    state->b = 255;
+    state->r = 0;
+    state->g = 0;
+    state->b = 0;
     state->prev_mode = 255;  // Force initial update
     state->prev_letter = 0;
     state->prev_r = 0;
@@ -98,6 +100,16 @@ void npm_state_init(NpmState* state) {
     state->prev_b = 0;
     state->rainbow_offset = 0;
     state->needs_update = true;
+
+    // Initialize scroll state
+    state->scroll_text_id = 0;
+    state->scroll_buffer_len = 0;
+    state->scroll_position = 0;
+    state->scroll_last_update = 0;
+    state->scroll_speed = NPM_SCROLL_SPEED;
+    state->scroll_looping = true;
+    state->prev_scroll_text_id = 255;
+    memset(state->scroll_buffer, 0, sizeof(state->scroll_buffer));
 }
 
 void npm_set_mode(NpmState* state, uint8_t mode, char letter, uint8_t r, uint8_t g, uint8_t b) {
@@ -115,48 +127,70 @@ void npm_set_mode(NpmState* state, uint8_t mode, char letter, uint8_t r, uint8_t
     state->r = r;
     state->g = g;
     state->b = b;
+
+    // For scroll mode, interpret letter as text ID
+    // '0'-'9' maps to text IDs 0-9, 'A'-'Z' maps to 0-25 as fallback
+    if (mode == NPM_MODE_SCROLL) {
+        uint8_t text_id = 0;
+        if (letter >= '0' && letter <= '9') {
+            text_id = letter - '0';
+        } else if (letter >= 'A' && letter <= 'Z') {
+            text_id = letter - 'A';
+        } else if (letter >= 'a' && letter <= 'z') {
+            text_id = letter - 'a';
+        }
+        state->scroll_text_id = text_id;
+    }
 }
 
 void npm_update(NpmState* state) {
     if (npm_strip == nullptr) return;
 
-    // Check if state changed
-    bool changed = state->needs_update ||
-                   state->mode != state->prev_mode ||
-                   state->letter != state->prev_letter ||
-                   state->r != state->prev_r ||
-                   state->g != state->prev_g ||
-                   state->b != state->prev_b;
+    // Check if mode changed
+    bool mode_changed = (state->mode != state->prev_mode);
 
-    // Rainbow mode always updates
-    if (state->mode == NPM_MODE_RAINBOW) {
-        npm_update_rainbow(state);
-        state->prev_mode = state->mode;
-        return;
-    }
-
-    if (!changed) return;
-
-    // Handle mode
     switch (state->mode) {
         case NPM_MODE_OFF:
-            npm_clear();
+            if (mode_changed || state->needs_update) {
+                npm_clear();
+            }
             break;
 
         case NPM_MODE_LETTER:
-            npm_display_letter(state->letter, state->r, state->g, state->b);
+            if (mode_changed || state->needs_update ||
+                state->letter != state->prev_letter ||
+                state->r != state->prev_r || state->g != state->prev_g || state->b != state->prev_b) {
+                npm_display_letter(state->letter, state->r, state->g, state->b);
+            }
+            break;
+
+        case NPM_MODE_SCROLL:
+            npm_update_scroll(state);
+            break;
+
+        case NPM_MODE_RAINBOW:
+            npm_update_rainbow(state);
             break;
 
         case NPM_MODE_SOLID:
-            npm_display_solid(state->r, state->g, state->b);
+            if (mode_changed || state->needs_update ||
+                state->r != state->prev_r || state->g != state->prev_g || state->b != state->prev_b) {
+                npm_display_solid(state->r, state->g, state->b);
+            }
             break;
 
         case NPM_MODE_EYE_CLOSED:
-            npm_display_eye_closed(state->r, state->g, state->b);
+            if (mode_changed || state->needs_update ||
+                state->r != state->prev_r || state->g != state->prev_g || state->b != state->prev_b) {
+                npm_display_eye_closed(state->r, state->g, state->b);
+            }
             break;
 
         case NPM_MODE_EYE_OPEN:
-            npm_display_eye_open(state->r, state->g, state->b);
+            if (mode_changed || state->needs_update ||
+                state->r != state->prev_r || state->g != state->prev_g || state->b != state->prev_b) {
+                npm_display_eye_open(state->r, state->g, state->b);
+            }
             break;
 
         default:
@@ -273,4 +307,128 @@ void npm_update_rainbow(NpmState* state) {
 
     // Advance animation
     state->rainbow_offset = (state->rainbow_offset + NPM_RAINBOW_SPEED) & 0xFF;
+}
+
+// Helper: Get column data for a character (5 rows packed into a byte)
+static uint8_t get_char_column(char c, int col) {
+    if (c >= 'A' && c <= 'Z') {
+        // Convert row-based font to column
+        int idx = c - 'A';
+        uint8_t column = 0;
+        for (int row = 0; row < 5; row++) {
+            // Check if this row has a pixel in this column
+            if (SCROLL_FONT_5X5[idx][row] & (1 << (4 - col))) {
+                column |= (1 << row);
+            }
+        }
+        return column;
+    } else if (c >= 'a' && c <= 'z') {
+        return get_char_column(c - 'a' + 'A', col);
+    } else if (c == ' ') {
+        return 0;  // Empty column
+    } else if (c == '?') {
+        uint8_t column = 0;
+        for (int row = 0; row < 5; row++) {
+            if (SCROLL_FONT_QUESTION[row] & (1 << (4 - col))) {
+                column |= (1 << row);
+            }
+        }
+        return column;
+    }
+    return 0;  // Unknown character
+}
+
+void npm_set_scroll_text(NpmState* state, uint8_t text_id, uint8_t r, uint8_t g, uint8_t b) {
+    // Get text string
+    const char* text = nullptr;
+    if (text_id < SCROLL_TEXT_COUNT) {
+        text = SCROLL_TEXTS[text_id];
+    } else {
+        text = "?";  // Fallback
+    }
+
+    // Build scroll buffer: each character is 5 columns + 1 gap column
+    // Add 5 blank columns at start and end for smooth scroll on/off
+    uint16_t buf_pos = 0;
+
+    // Leading blank columns (matrix width)
+    for (int i = 0; i < 5 && buf_pos < NPM_SCROLL_BUFFER_SIZE; i++) {
+        state->scroll_buffer[buf_pos++] = 0;
+    }
+
+    // Add each character
+    for (int i = 0; text[i] != '\0' && buf_pos < NPM_SCROLL_BUFFER_SIZE - 6; i++) {
+        char c = text[i];
+
+        // Add 5 columns for this character
+        for (int col = 0; col < 5; col++) {
+            state->scroll_buffer[buf_pos++] = get_char_column(c, col);
+        }
+
+        // Add gap column between characters
+        state->scroll_buffer[buf_pos++] = 0;
+    }
+
+    // Trailing blank columns (matrix width)
+    for (int i = 0; i < 5 && buf_pos < NPM_SCROLL_BUFFER_SIZE; i++) {
+        state->scroll_buffer[buf_pos++] = 0;
+    }
+
+    state->scroll_buffer_len = buf_pos;
+    state->scroll_position = 0;
+    state->scroll_last_update = millis();
+    state->scroll_text_id = text_id;
+    state->r = r;
+    state->g = g;
+    state->b = b;
+}
+
+void npm_update_scroll(NpmState* state) {
+    if (npm_strip == nullptr) return;
+
+    uint32_t now = millis();
+
+    // Initialize scroll buffer on first run with a random text
+    if (state->scroll_buffer_len == 0) {
+        uint8_t initial_text_id = random(0, SCROLL_TEXT_COUNT);
+        npm_set_scroll_text(state, initial_text_id, state->r, state->g, state->b);
+    }
+
+    // Check if it's time to advance the scroll
+    if (now - state->scroll_last_update >= state->scroll_speed) {
+        state->scroll_last_update = now;
+        state->scroll_position++;
+
+        // Check for wrap - pick a new random text
+        if (state->scroll_position >= state->scroll_buffer_len) {
+            uint8_t new_text_id = random(0, SCROLL_TEXT_COUNT);
+            npm_set_scroll_text(state, new_text_id, state->r, state->g, state->b);
+            state->scroll_position = 0;
+        }
+    }
+
+    // Render current 5 columns to the matrix
+    npm_strip->clear();
+    uint32_t color = npm_strip->Color(state->r, state->g, state->b);
+
+    for (int display_col = 0; display_col < 5; display_col++) {
+        // Get column from buffer (with wrapping)
+        uint16_t buf_col = state->scroll_position + display_col;
+        if (buf_col >= state->scroll_buffer_len) {
+            buf_col = buf_col % state->scroll_buffer_len;
+        }
+
+        uint8_t column_data = state->scroll_buffer[buf_col];
+
+        // Render this column (5 rows)
+        for (int row = 0; row < 5; row++) {
+            if (column_data & (1 << row)) {
+                // Calculate pixel index (row * 5 + col)
+                int pixel = row * 5 + display_col;
+                npm_strip->setPixelColor(pixel, color);
+            }
+        }
+    }
+
+    npm_strip->show();
 }

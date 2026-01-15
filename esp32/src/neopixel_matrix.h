@@ -26,6 +26,10 @@
 
 // Animation speeds
 #define NPM_RAINBOW_SPEED   10      // Rainbow color cycling speed
+#define NPM_SCROLL_SPEED    100     // Scroll speed (ms per column shift)
+
+// Maximum scroll buffer size
+#define NPM_SCROLL_BUFFER_SIZE  128  // Max columns in scroll buffer
 
 // Matrix state structure
 typedef struct {
@@ -37,6 +41,16 @@ typedef struct {
     uint8_t prev_r, prev_g, prev_b;
     uint16_t rainbow_offset;        // For rainbow animation
     bool needs_update;
+
+    // Scroll state
+    uint8_t scroll_text_id;         // Current scroll text ID
+    uint8_t scroll_buffer[NPM_SCROLL_BUFFER_SIZE];  // Column data for scrolling
+    uint16_t scroll_buffer_len;     // Length of scroll buffer in columns
+    uint16_t scroll_position;       // Current scroll position (column offset)
+    uint32_t scroll_last_update;    // Last scroll update time (ms)
+    uint16_t scroll_speed;          // Scroll speed (ms per column shift)
+    bool scroll_looping;            // Whether to loop the scroll
+    uint8_t prev_scroll_text_id;    // Previous text ID for change detection
 } NpmState;
 
 /**
@@ -128,5 +142,24 @@ void npm_display_eye_open(uint8_t r, uint8_t g, uint8_t b);
  * @param state Pointer to state structure
  */
 void npm_update_rainbow(NpmState* state);
+
+/**
+ * Set scroll text by ID.
+ * Builds the scroll buffer from predefined text.
+ *
+ * @param state Pointer to state structure
+ * @param text_id Scroll text ID (see scroll_texts.h)
+ * @param r Red value (0-255)
+ * @param g Green value (0-255)
+ * @param b Blue value (0-255)
+ */
+void npm_set_scroll_text(NpmState* state, uint8_t text_id, uint8_t r, uint8_t g, uint8_t b);
+
+/**
+ * Update scroll animation (call periodically).
+ *
+ * @param state Pointer to state structure
+ */
+void npm_update_scroll(NpmState* state);
 
 #endif // NEOPIXEL_MATRIX_H

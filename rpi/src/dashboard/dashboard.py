@@ -317,11 +317,10 @@ class Dashboard:
         # State machine controls
         elif button_name == "emergency_stop" and self.state_machine:
             self.state_machine.emergency_stop()
-            self.state.set_command(valve_open=False, estop_enable=False)
+            self.state.set_command(valve_open=False)
             logger.warning("EMERGENCY STOP triggered")
         elif button_name == "enable_dispensing" and self.state_machine:
             self.state_machine.enable_dispensing()
-            self.state.set_command(estop_enable=True)
             logger.info("Dispensing re-enabled")
         elif button_name == "force_reset" and self.state_machine:
             self.state_machine.force_reset()

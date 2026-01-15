@@ -1,4 +1,7 @@
 #include <Arduino.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "config.h"
 #include "state.h"
 #include "uart_handler.h"
@@ -10,41 +13,328 @@
 #include "neopixel_matrix.h"
 #include "neopixel_ring.h"
 
-// Global state
+// =============================================================================
+// RTOS Configuration
+// =============================================================================
+#define TASK_COMM_STACK_SIZE      4096
+#define TASK_ANIMATION_STACK_SIZE 4096
+#define TASK_CONTROL_STACK_SIZE   4096
+
+#define TASK_COMM_PRIORITY        2
+#define TASK_ANIMATION_PRIORITY   1
+#define TASK_CONTROL_PRIORITY     2
+
+#define TASK_COMM_CORE            0   // Communication on Core 0
+#define TASK_ANIMATION_CORE       1   // Animation on Core 1
+#define TASK_CONTROL_CORE         1   // Control on Core 1
+
+// Task periods in milliseconds
+#define COMM_TASK_PERIOD_MS       33  // ~30Hz
+#define ANIMATION_TASK_PERIOD_MS  20  // 50Hz
+#define CONTROL_TASK_PERIOD_MS    10  // 100Hz
+
+// =============================================================================
+// Global State (protected by mutex)
+// =============================================================================
 DeviceState g_state;
 ValveState g_valve_state;
 NpmState g_npm_state;
 NprState g_npr_state;
+MatrixScrollState g_matrix_scroll_state;
 
-// Timing
-uint32_t g_last_loop_time = 0;
-uint32_t g_last_status_time = 0;
-uint32_t g_last_animation_time = 0;
-uint32_t g_last_command_time = 0;
-bool g_has_received_command = false;
+// Mutex for protecting shared state
+SemaphoreHandle_t g_state_mutex = NULL;
+
+// Communication tracking (accessed by comm task)
+volatile uint32_t g_last_command_time = 0;
+volatile bool g_has_received_command = false;
 
 // Test LED state
-uint32_t g_test_triggered_time = 0;
-bool g_test_led_on = false;
+volatile uint32_t g_test_triggered_time = 0;
+volatile bool g_test_led_on = false;
 
-// Animation timing
-#define ANIMATION_INTERVAL_MS 20  // 50Hz animation update
+// Task handles
+TaskHandle_t g_comm_task_handle = NULL;
+TaskHandle_t g_animation_task_handle = NULL;
+TaskHandle_t g_control_task_handle = NULL;
 
-// Forward declarations
-void update_servos(DeviceState* state);
-void update_rgb(DeviceState* state);
-void update_matrix(DeviceState* state);
-void update_valve(DeviceState* state);
-void update_neopixel_matrix(DeviceState* state);
-void update_neopixel_ring(DeviceState* state);
-void check_test_command(DeviceState* state);
-void update_test_led();
+// =============================================================================
+// Helper Functions
+// =============================================================================
 
-void setup()
-{
+// Lock the state mutex (with timeout)
+inline bool state_lock(TickType_t timeout = portMAX_DELAY) {
+    return xSemaphoreTake(g_state_mutex, timeout) == pdTRUE;
+}
+
+// Unlock the state mutex
+inline void state_unlock() {
+    xSemaphoreGive(g_state_mutex);
+}
+
+// =============================================================================
+// Communication Task - UART RX/TX (Core 0)
+// =============================================================================
+void comm_task(void* pvParameters) {
+    TickType_t last_status_time = 0;
+    const TickType_t period = pdMS_TO_TICKS(COMM_TASK_PERIOD_MS);
+    const TickType_t status_interval = pdMS_TO_TICKS(STATUS_TX_PERIOD_MS);
+
+    DEBUG_PRINTF("[RTOS] Communication task started on Core %d\n", xPortGetCoreID());
+
+    for (;;) {
+        TickType_t task_start = xTaskGetTickCount();
+
+        // Receive and parse commands (locks mutex internally if needed)
+        if (state_lock(pdMS_TO_TICKS(10))) {
+            uart_receive(&g_state);
+            state_check_connection(&g_state, CONNECTION_TIMEOUT_MS);
+            state_unlock();
+        }
+
+        // Send status if connected
+        TickType_t now = xTaskGetTickCount();
+        bool connected = g_has_received_command &&
+                        ((now - g_last_command_time) < pdMS_TO_TICKS(1000));
+
+        if (connected && (now - last_status_time >= status_interval)) {
+            if (state_lock(pdMS_TO_TICKS(10))) {
+                uart_send_status(&g_state);
+                state_unlock();
+            }
+            last_status_time = now;
+        }
+
+        // Delay until next period
+        vTaskDelayUntil(&task_start, period);
+    }
+}
+
+// =============================================================================
+// Animation Task - NeoPixel & RGB animations (Core 1)
+// =============================================================================
+void animation_task(void* pvParameters) {
+    const TickType_t period = pdMS_TO_TICKS(ANIMATION_TASK_PERIOD_MS);
+    uint16_t rainbow_hue = 0;
+
+    DEBUG_PRINTF("[RTOS] Animation task started on Core %d\n", xPortGetCoreID());
+
+    for (;;) {
+        TickType_t task_start = xTaskGetTickCount();
+
+        // Update NeoPixel matrix
+        npm_update(&g_npm_state);
+
+        // Update NeoPixel ring animation
+        npr_update(&g_npr_state);
+
+        // Update MAX7219 LED matrix scrolling text
+        led_matrix_update_scroll(&g_matrix_scroll_state);
+
+        // Update RGB strip rainbow animation if in rainbow mode
+        if (state_lock(pdMS_TO_TICKS(5))) {
+            if (g_state.command.rgb_mode == 1 && g_state.output.light_on) {
+                // Rainbow mode - cycle through colors
+                uint8_t region = rainbow_hue / 43;
+                uint8_t remainder = (rainbow_hue - (region * 43)) * 6;
+                uint8_t r, g, b;
+                uint8_t q = 255 - remainder;
+                uint8_t t = remainder;
+
+                switch (region) {
+                    case 0:  r = 255; g = t;   b = 0;   break;
+                    case 1:  r = q;   g = 255; b = 0;   break;
+                    case 2:  r = 0;   g = 255; b = t;   break;
+                    case 3:  r = 0;   g = q;   b = 255; break;
+                    case 4:  r = t;   g = 0;   b = 255; break;
+                    default: r = 255; g = 0;   b = q;   break;
+                }
+
+                rgb_set(r, g, b);
+                rainbow_hue = (rainbow_hue + 2) % 256;
+            }
+            state_unlock();
+        }
+
+        // Delay until next period
+        vTaskDelayUntil(&task_start, period);
+    }
+}
+
+// =============================================================================
+// Control Task - Servos, sensors, valve (Core 1)
+// =============================================================================
+void control_task(void* pvParameters) {
+    const TickType_t period = pdMS_TO_TICKS(CONTROL_TASK_PERIOD_MS);
+
+    // Track previous values for change detection
+    uint8_t prev_matrix_left = 255;
+    uint8_t prev_matrix_right = 255;
+    uint8_t prev_rgb_mode = 255;
+    uint8_t prev_rgb_r = 255, prev_rgb_g = 255, prev_rgb_b = 255;
+    uint8_t prev_light_cmd = 255;
+
+    DEBUG_PRINTF("[RTOS] Control task started on Core %d\n", xPortGetCoreID());
+
+    for (;;) {
+        TickType_t task_start = xTaskGetTickCount();
+
+        // Read limit switch (no mutex needed - atomic operation)
+        bool limit_active;
+        uint8_t limit_dir;
+        limit_switch_read(&limit_active, &limit_dir);
+
+        if (state_lock(pdMS_TO_TICKS(10))) {
+            // Update limit switch state
+            state_update_limit(&g_state, limit_active, limit_dir);
+
+            // Check for test command
+            if ((g_state.command.flags & CMD_FLAG_LED_TEST) && !g_test_led_on) {
+                g_test_led_on = true;
+                g_test_triggered_time = xTaskGetTickCount();
+                digitalWrite(TEST_LED_PIN, HIGH);
+                g_state.command.flags &= ~CMD_FLAG_LED_TEST;
+            }
+
+            // Update valve (command is set by uart_handler when $VLV received, not here)
+            // valve_safety_set_command is called in uart_handler, not every tick
+            bool valve_should_open = valve_safety_update(&g_valve_state, g_state.command.connected);
+            g_state.command.target_servo_angles[VALVE_SERVO_INDEX] =
+                valve_should_open ? VALVE_OPEN_ANGLE : VALVE_CLOSED_ANGLE;
+
+            // Update servos
+            for (int i = 0; i < NUM_SERVOS; i++) {
+                float target = g_state.command.target_servo_angles[i];
+                float current = g_state.output.servo_angles[i];
+                float new_angle = servo_move_toward(i, current, target, SERVO_SPEED);
+                bool moving = (abs(new_angle - target) > 0.1f);
+                state_update_servo(&g_state, i, new_angle, moving);
+            }
+
+            // Update MAX7219 LED matrix mode (scroll vs pattern)
+            uint8_t left = g_state.command.matrix_left;
+            uint8_t right = g_state.command.matrix_right;
+            if (left != prev_matrix_left || right != prev_matrix_right) {
+                if (left == 0 && right == 0) {
+                    // Enable scroll mode (patterns are 0,0)
+                    led_matrix_set_scroll_mode(&g_matrix_scroll_state, true);
+                } else {
+                    // Disable scroll mode and set patterns
+                    led_matrix_set_scroll_mode(&g_matrix_scroll_state, false);
+                    led_matrix_set_patterns(left, right);
+                }
+                prev_matrix_left = left;
+                prev_matrix_right = right;
+            }
+
+            // Update RGB strip solid color (rainbow handled in animation task)
+            uint8_t mode = g_state.command.rgb_mode;
+            uint8_t r = g_state.command.rgb_r;
+            uint8_t g = g_state.command.rgb_g;
+            uint8_t b = g_state.command.rgb_b;
+            uint8_t light_cmd = g_state.command.light_command;
+
+            bool should_be_on = false;
+            switch (light_cmd) {
+                case LIGHT_CMD_OFF: should_be_on = false; break;
+                case LIGHT_CMD_ON:  should_be_on = true;  break;
+                case LIGHT_CMD_AUTO:
+                    should_be_on = (mode == 1) || (r > 0 || g > 0 || b > 0);
+                    break;
+            }
+
+            if (!should_be_on) {
+                if (prev_light_cmd != LIGHT_CMD_OFF || prev_rgb_r != 0 || prev_rgb_g != 0 || prev_rgb_b != 0) {
+                    rgb_off();
+                    prev_rgb_r = 0;
+                    prev_rgb_g = 0;
+                    prev_rgb_b = 0;
+                }
+            } else if (mode == 0) {
+                // Solid color mode
+                if (r == 0 && g == 0 && b == 0) { r = g = b = 255; }
+                if (r != prev_rgb_r || g != prev_rgb_g || b != prev_rgb_b || mode != prev_rgb_mode) {
+                    rgb_set(r, g, b);
+                    prev_rgb_r = r;
+                    prev_rgb_g = g;
+                    prev_rgb_b = b;
+                }
+            }
+
+            prev_light_cmd = light_cmd;
+            prev_rgb_mode = mode;
+            state_update_light(&g_state, should_be_on);
+
+            // Update NeoPixel matrix colors from command (text selection is autonomous)
+            npm_set_mode(&g_npm_state,
+                        g_state.command.npm_mode,
+                        g_state.command.npm_letter,
+                        g_state.command.npm_r,
+                        g_state.command.npm_g,
+                        g_state.command.npm_b);
+
+            // Update NeoPixel ring mode
+            npr_set_mode(&g_npr_state,
+                        g_state.command.npr_mode,
+                        g_state.command.npr_r,
+                        g_state.command.npr_g,
+                        g_state.command.npr_b);
+
+            state_unlock();
+        }
+
+        // Update test LED (non-blocking, outside mutex)
+        if (g_test_led_on) {
+            if ((xTaskGetTickCount() - g_test_triggered_time) >= pdMS_TO_TICKS(TEST_LED_DURATION_MS)) {
+                digitalWrite(TEST_LED_PIN, LOW);
+                g_test_led_on = false;
+            }
+        }
+
+        // Delay until next period
+        vTaskDelayUntil(&task_start, period);
+    }
+}
+
+// =============================================================================
+// Callbacks for uart_handler
+// =============================================================================
+void on_command_received() {
+    g_last_command_time = xTaskGetTickCount();
+    g_has_received_command = true;
+}
+
+bool get_valve_open() {
+    return g_valve_state.actual_open;
+}
+
+bool get_valve_enabled() {
+    return g_valve_state.enabled;
+}
+
+uint32_t get_valve_open_ms() {
+    return valve_safety_get_open_ms(&g_valve_state);
+}
+
+bool is_test_active() {
+    if (g_test_triggered_time == 0) return false;
+    return (xTaskGetTickCount() - g_test_triggered_time) < pdMS_TO_TICKS(1000);
+}
+
+// =============================================================================
+// Setup & Loop
+// =============================================================================
+void setup() {
     // Initialize USB serial for protocol communication
     Serial.begin(115200);
-    delay(100); // Brief delay for serial init
+    delay(100);
+
+    DEBUG_PRINTLN("=================================");
+    DEBUG_PRINTLN("ESP32 RTOS Firmware Starting...");
+    DEBUG_PRINTLN("=================================");
+
+    // Seed random number generator
+    randomSeed(analogRead(0) ^ micros());
 
     // Initialize test LED
     pinMode(TEST_LED_PIN, OUTPUT);
@@ -55,303 +345,66 @@ void setup()
     valve_safety_init(&g_valve_state);
     npm_state_init(&g_npm_state);
     npr_state_init(&g_npr_state);
+    led_matrix_scroll_init(&g_matrix_scroll_state);
 
-    // Initialize components
+    // Initialize hardware components
     uart_init();
     servo_init();
     rgb_init();
     led_matrix_init();
     limit_switch_init();
-
-    // Initialize NeoPixel devices
     npm_init(NPM_DATA_PIN);
     npr_init(NPR_DATA_PIN);
-}
 
-void loop()
-{
-    uint32_t now = millis();
-
-    // Update test LED (non-blocking)
-    update_test_led();
-
-    // Update animations at regular interval (50Hz)
-    if (now - g_last_animation_time >= ANIMATION_INTERVAL_MS)
-    {
-        g_last_animation_time = now;
-
-        // Update NeoPixel animations
-        npm_update(&g_npm_state);
-        npr_update(&g_npr_state);
+    // Create mutex for state protection
+    g_state_mutex = xSemaphoreCreateMutex();
+    if (g_state_mutex == NULL) {
+        DEBUG_PRINTLN("[ERROR] Failed to create state mutex!");
+        while (1) { delay(1000); }
     }
 
-    // Rate limit main loop
-    if (now - g_last_loop_time < LOOP_PERIOD_MS)
-    {
-        delay(1);
-        return;
-    }
-    g_last_loop_time = now;
+    // Create RTOS tasks
+    DEBUG_PRINTLN("[RTOS] Creating tasks...");
 
-    // Read limit switch
-    bool limit_active;
-    uint8_t limit_dir;
-    limit_switch_read(&limit_active, &limit_dir);
-    state_update_limit(&g_state, limit_active, limit_dir);
+    // Communication task on Core 0
+    xTaskCreatePinnedToCore(
+        comm_task,
+        "CommTask",
+        TASK_COMM_STACK_SIZE,
+        NULL,
+        TASK_COMM_PRIORITY,
+        &g_comm_task_handle,
+        TASK_COMM_CORE
+    );
 
-    // Receive and parse commands
-    uart_receive(&g_state);
+    // Animation task on Core 1
+    xTaskCreatePinnedToCore(
+        animation_task,
+        "AnimTask",
+        TASK_ANIMATION_STACK_SIZE,
+        NULL,
+        TASK_ANIMATION_PRIORITY,
+        &g_animation_task_handle,
+        TASK_ANIMATION_CORE
+    );
 
-    // Check connection status
-    state_check_connection(&g_state, CONNECTION_TIMEOUT_MS);
+    // Control task on Core 1
+    xTaskCreatePinnedToCore(
+        control_task,
+        "CtrlTask",
+        TASK_CONTROL_STACK_SIZE,
+        NULL,
+        TASK_CONTROL_PRIORITY,
+        &g_control_task_handle,
+        TASK_CONTROL_CORE
+    );
 
-    // Check for test command
-    check_test_command(&g_state);
-
-    // Update all servo positions
-    update_servos(&g_state);
-
-    // Update valve
-    update_valve(&g_state);
-
-    // Update RGB strip
-    update_rgb(&g_state);
-
-    // Update MAX7219 LED matrix
-    update_matrix(&g_state);
-
-    // Update NeoPixel matrix and ring modes (animations updated above)
-    update_neopixel_matrix(&g_state);
-    update_neopixel_ring(&g_state);
-
-    // Send status if connected (received command within 1 second)
-    bool connected = g_has_received_command && (now - g_last_command_time) < 1000;
-    if (connected && (now - g_last_status_time >= STATUS_TX_PERIOD_MS))
-    {
-        uart_send_status(&g_state);
-        g_last_status_time = now;
-    }
+    DEBUG_PRINTLN("[RTOS] All tasks created successfully!");
+    DEBUG_PRINTLN("=================================");
 }
 
-// Called by uart_handler when a valid command is received
-void on_command_received()
-{
-    g_last_command_time = millis();
-    g_has_received_command = true;
-}
-
-// Functions called by uart_handler for valve state
-bool get_valve_open()
-{
-    return g_valve_state.actual_open;
-}
-
-bool get_valve_enabled()
-{
-    return g_valve_state.enabled;
-}
-
-uint32_t get_valve_open_ms()
-{
-    return valve_safety_get_open_ms(&g_valve_state);
-}
-
-bool is_test_active()
-{
-    if (g_test_triggered_time == 0)
-    {
-        return false;
-    }
-    return (millis() - g_test_triggered_time) < 1000;
-}
-
-void check_test_command(DeviceState* state)
-{
-    if ((state->command.flags & CMD_FLAG_LED_TEST) && !g_test_led_on)
-    {
-        // Turn on LED and record time
-        g_test_led_on = true;
-        g_test_triggered_time = millis();
-        digitalWrite(TEST_LED_PIN, HIGH);
-
-        // Clear flag
-        state->command.flags &= ~CMD_FLAG_LED_TEST;
-    }
-}
-
-void update_test_led()
-{
-    if (g_test_led_on)
-    {
-        if ((millis() - g_test_triggered_time) >= TEST_LED_DURATION_MS)
-        {
-            // Turn off LED after duration
-            digitalWrite(TEST_LED_PIN, LOW);
-            g_test_led_on = false;
-        }
-    }
-}
-
-void update_servos(DeviceState* state)
-{
-    // Update all servos
-    for (int i = 0; i < NUM_SERVOS; i++)
-    {
-        float target = state->command.target_servo_angles[i];
-        float current = state->output.servo_angles[i];
-
-        // Move servo toward target
-        float new_angle = servo_move_toward(i, current, target, SERVO_SPEED);
-        bool moving = (abs(new_angle - target) > 0.1f);
-
-        state_update_servo(state, i, new_angle, moving);
-    }
-}
-
-void update_valve(DeviceState* state)
-{
-    // Update valve command from state
-    valve_safety_set_command(&g_valve_state, state->command.valve_open);
-    valve_safety_set_enabled(&g_valve_state, state->command.valve_enabled);
-
-    // Update valve safety (handles timeouts, connection loss, etc.)
-    bool valve_should_open = valve_safety_update(&g_valve_state, state->command.connected);
-
-    // TODO: Actually control valve servo/solenoid here
-    // For now, servo 1 (index 0) is the valve servo
-    // When valve should be open, move servo 1 to open position
-    // This would typically be done via a dedicated valve servo position
-    // state->command.target_servo_angles[0] = valve_should_open ? VALVE_OPEN_ANGLE : VALVE_CLOSED_ANGLE;
-}
-
-void update_rgb(DeviceState* state)
-{
-    // Track previous values to avoid unnecessary updates
-    static uint8_t prev_mode = 255;
-    static uint8_t prev_r = 255, prev_g = 255, prev_b = 255;
-    static uint8_t prev_light_cmd = 255;
-    static uint16_t rainbow_hue = 0;
-
-    uint8_t mode = state->command.rgb_mode;
-    uint8_t r = state->command.rgb_r;
-    uint8_t g = state->command.rgb_g;
-    uint8_t b = state->command.rgb_b;
-    bool should_be_on = false;
-
-    // Determine if lights should be on based on light command
-    switch (state->command.light_command)
-    {
-    case LIGHT_CMD_OFF:
-        should_be_on = false;
-        break;
-    case LIGHT_CMD_ON:
-        should_be_on = true;
-        break;
-    case LIGHT_CMD_AUTO:
-        should_be_on = state->output.light_on;
-        break;
-    default:
-        should_be_on = false;
-        break;
-    }
-
-    // Apply RGB based on mode and light command
-    if (!should_be_on)
-    {
-        // Light is off - turn off RGB
-        if (prev_light_cmd != LIGHT_CMD_OFF || prev_r != 0 || prev_g != 0 || prev_b != 0)
-        {
-            rgb_off();
-            prev_r = 0;
-            prev_g = 0;
-            prev_b = 0;
-        }
-    }
-    else if (mode == 1)
-    {
-        // Rainbow mode - cycle through colors
-        // Simple HSV to RGB conversion
-        uint8_t region = rainbow_hue / 43;
-        uint8_t remainder = (rainbow_hue - (region * 43)) * 6;
-
-        uint8_t q = 255 - remainder;
-        uint8_t t = remainder;
-
-        switch (region)
-        {
-        case 0:  r = 255; g = t;   b = 0;   break;
-        case 1:  r = q;   g = 255; b = 0;   break;
-        case 2:  r = 0;   g = 255; b = t;   break;
-        case 3:  r = 0;   g = q;   b = 255; break;
-        case 4:  r = t;   g = 0;   b = 255; break;
-        default: r = 255; g = 0;   b = q;   break;
-        }
-
-        rgb_set(r, g, b);
-        rainbow_hue = (rainbow_hue + 2) % 256;
-
-        prev_mode = mode;
-    }
-    else
-    {
-        // Solid color mode
-        if (r == 0 && g == 0 && b == 0)
-        {
-            r = 255;
-            g = 255;
-            b = 255;
-        }
-
-        // Only update if values changed
-        if (r != prev_r || g != prev_g || b != prev_b || mode != prev_mode)
-        {
-            rgb_set(r, g, b);
-            prev_r = r;
-            prev_g = g;
-            prev_b = b;
-        }
-    }
-
-    prev_light_cmd = state->command.light_command;
-    prev_mode = mode;
-    state_update_light(state, should_be_on);
-}
-
-void update_matrix(DeviceState* state)
-{
-    // Track previous patterns to avoid unnecessary updates
-    static uint8_t prev_left = 255;
-    static uint8_t prev_right = 255;
-
-    uint8_t left = state->command.matrix_left;
-    uint8_t right = state->command.matrix_right;
-
-    // Only update if patterns changed
-    if (left != prev_left || right != prev_right)
-    {
-        led_matrix_set_patterns(left, right);
-        prev_left = left;
-        prev_right = right;
-    }
-}
-
-void update_neopixel_matrix(DeviceState* state)
-{
-    // Update NeoPixel matrix mode from command state
-    npm_set_mode(&g_npm_state,
-                 state->command.npm_mode,
-                 state->command.npm_letter,
-                 state->command.npm_r,
-                 state->command.npm_g,
-                 state->command.npm_b);
-}
-
-void update_neopixel_ring(DeviceState* state)
-{
-    // Update NeoPixel ring mode from command state
-    npr_set_mode(&g_npr_state,
-                 state->command.npr_mode,
-                 state->command.npr_r,
-                 state->command.npr_g,
-                 state->command.npr_b);
+void loop() {
+    // Empty - all work done in RTOS tasks
+    // Could add watchdog or system monitoring here
+    vTaskDelay(pdMS_TO_TICKS(1000));
 }

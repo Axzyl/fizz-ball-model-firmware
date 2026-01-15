@@ -26,22 +26,22 @@ void state_init(DeviceState* state) {
     state->command.rgb_g = 0;
     state->command.rgb_b = 0;
 
-    // MAX7219 matrix
-    state->command.matrix_left = 1;   // Default: circle
-    state->command.matrix_right = 2;  // Default: X
+    // MAX7219 matrix - will scroll text (handled separately)
+    state->command.matrix_left = 0;   // Not used for scroll mode
+    state->command.matrix_right = 0;
 
-    // NeoPixel matrix
-    state->command.npm_mode = 0;
+    // NeoPixel 5x5 matrix - OFF by default
+    state->command.npm_mode = 0;      // NPM_MODE_OFF
     state->command.npm_letter = 'A';
-    state->command.npm_r = 255;
-    state->command.npm_g = 255;
-    state->command.npm_b = 255;
+    state->command.npm_r = 0;
+    state->command.npm_g = 0;
+    state->command.npm_b = 0;
 
-    // NeoPixel ring
+    // NeoPixel ring - OFF by default
     state->command.npr_mode = 0;
-    state->command.npr_r = 255;
-    state->command.npr_g = 255;
-    state->command.npr_b = 255;
+    state->command.npr_r = 0;
+    state->command.npr_g = 0;
+    state->command.npr_b = 0;
 
     // Valve control
     state->command.valve_open = false;

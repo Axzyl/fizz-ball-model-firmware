@@ -38,9 +38,9 @@ void npr_init(uint8_t pin) {
 
 void npr_state_init(NprState* state) {
     state->mode = NPR_MODE_OFF;
-    state->r = 255;
-    state->g = 255;
-    state->b = 255;
+    state->r = 0;  // OFF - no color
+    state->g = 0;
+    state->b = 0;
     state->prev_mode = 255;  // Force initial update
     state->prev_r = 0;
     state->prev_g = 0;

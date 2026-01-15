@@ -163,6 +163,20 @@ TRACKING_MAX_VELOCITY = 4.0    # Max servo movement per tick in degrees (higher 
 TRACKING_DEADZONE = 0.067       # Fraction of frame width to ignore (0.05 = 5%)
 
 # -----------------------------------------------------------------------------
+# Dispensing / Pour Settings
+# -----------------------------------------------------------------------------
+POUR_DURATION = 3.0           # Total pour time in seconds (ALIVE outcome)
+POUR_PARTIAL_RATIO = 0.35     # DEAD Step 2: fraction of total pour (35%)
+POUR_FINAL_RATIO = 0.65       # DEAD Step 5: remaining fraction (65%)
+
+# State durations (seconds)
+COLLAPSE_DURATION = 3.0       # Quantum collapse animation duration
+RESET_DURATION = 2.0          # Reset animation duration
+DEAD_TENSION_DURATION = 3.0   # DEAD Step 1: tension buildup
+DEAD_CHAOS_DURATION = 2.0     # DEAD Step 3: violent shaking
+DEAD_DARKNESS_DURATION = 1.0  # DEAD Step 4: all LEDs off
+
+# -----------------------------------------------------------------------------
 # Light Control
 # -----------------------------------------------------------------------------
 LIGHT_CMD_OFF = 0
