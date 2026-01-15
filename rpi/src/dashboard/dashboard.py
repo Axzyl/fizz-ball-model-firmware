@@ -331,12 +331,12 @@ class Dashboard:
         elif button_name == "skip_animation" and self.state_machine:
             self.state_machine.skip_animation()
             logger.info("Skip animation triggered")
-        elif button_name == "open_valve":
-            self.state.set_command(valve_open=True)
-            logger.info("Valve opened")
-        elif button_name == "close_valve":
-            self.state.set_command(valve_open=False)
-            logger.info("Valve closed")
+        elif button_name == "open_valve" and self.state_machine:
+            self.state_machine.open_valve()
+            logger.info("Valve opened (manual override)")
+        elif button_name == "close_valve" and self.state_machine:
+            self.state_machine.close_valve()
+            logger.info("Valve closed (manual override cleared)")
         elif button_name == "outcome_random" and self.state_machine:
             self.state_machine.set_forced_outcome(None)
             logger.info("Next outcome: RANDOM")

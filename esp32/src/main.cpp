@@ -7,7 +7,6 @@
 #include "uart_handler.h"
 #include "servo_controller.h"
 #include "rgb_strip.h"
-#include "led_matrix.h"
 #include "limit_switch.h"
 #include "valve_safety.h"
 #include "neopixel_matrix.h"
@@ -41,7 +40,6 @@ ValveState g_valve_state;
 NpmState g_npm_state;
 NprState g_npr_state;
 RgbState g_rgb_state;
-MatrixScrollState g_matrix_scroll_state;
 
 // Mutex for protecting shared state
 SemaphoreHandle_t g_state_mutex = NULL;
@@ -128,9 +126,6 @@ void animation_task(void* pvParameters) {
         // Update NeoPixel ring animation (no mutex needed - state is simple)
         npr_update(&g_npr_state);
 
-        // Update MAX7219 LED matrix scrolling text (no mutex needed)
-        led_matrix_update_scroll(&g_matrix_scroll_state);
-
         // Update RGB strip animation with mutex protection
         // (consistent with how control_task sets the state)
         if (state_lock(pdMS_TO_TICKS(5))) {
@@ -150,8 +145,6 @@ void control_task(void* pvParameters) {
     const TickType_t period = pdMS_TO_TICKS(CONTROL_TASK_PERIOD_MS);
 
     // Track previous values for change detection
-    uint8_t prev_matrix_left = 255;
-    uint8_t prev_matrix_right = 255;
     uint8_t prev_rgb_mode = 255;
     uint8_t prev_rgb_r = 255, prev_rgb_g = 255, prev_rgb_b = 255;
     uint8_t prev_light_cmd = 255;
@@ -198,22 +191,6 @@ void control_task(void* pvParameters) {
                 float new_angle = servo_move_toward(i, current, target, SERVO_SPEED);
                 bool moving = (abs(new_angle - target) > 0.1f);
                 state_update_servo(&g_state, i, new_angle, moving);
-            }
-
-            // Update MAX7219 LED matrix mode (scroll vs pattern)
-            uint8_t left = g_state.command.matrix_left;
-            uint8_t right = g_state.command.matrix_right;
-            if (left != prev_matrix_left || right != prev_matrix_right) {
-                if (left == 0 && right == 0) {
-                    // Enable scroll mode (patterns are 0,0)
-                    led_matrix_set_scroll_mode(&g_matrix_scroll_state, true);
-                } else {
-                    // Disable scroll mode and set patterns
-                    led_matrix_set_scroll_mode(&g_matrix_scroll_state, false);
-                    led_matrix_set_patterns(left, right);
-                }
-                prev_matrix_left = left;
-                prev_matrix_right = right;
             }
 
             // Update RGB strip mode (animations handled in animation task)
@@ -377,13 +354,11 @@ void setup() {
     npm_state_init(&g_npm_state);
     npr_state_init(&g_npr_state);
     rgb_state_init(&g_rgb_state);
-    led_matrix_scroll_init(&g_matrix_scroll_state);
 
     // Initialize hardware components
     uart_init();
     servo_init();
     rgb_init();
-    led_matrix_init();
     limit_switch_init();
     npm_init(NPM_DATA_PIN);
     npr_init(NPR_DATA_PIN);

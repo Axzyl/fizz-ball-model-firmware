@@ -95,26 +95,92 @@ static void reverse_string(char* str, int len) {
 }
 
 /**
- * Render current scroll frame using library's setChar.
+ * Render a single character rotated 90 degrees clockwise.
+ * After rotation: text scrolls vertically, characters are 8 tall x charWidth wide
+ * row_offset: vertical position (0 = top of display)
+ */
+static void render_char_rotated(char c, int row_offset) {
+    if (!mx) return;
+
+    // Get character width and data from library
+    uint8_t charWidth = mx->getChar(c, sizeof(scroll_text_buffer), (uint8_t*)scroll_text_buffer);
+
+    // For 90° CW rotation:
+    // Original col -> becomes row (from bottom)
+    // Original row -> becomes col (from left)
+    // Physical display: 8 cols wide, MATRIX_NUM_DEVICES*8 rows tall
+
+    for (uint8_t srcCol = 0; srcCol < charWidth; srcCol++) {
+        uint8_t colData = mx->getColumn(srcCol);  // Get the column we just rendered
+
+        // This column becomes a row after 90° CW rotation
+        int destRow = row_offset + srcCol;
+
+        if (destRow >= 0 && destRow < DISPLAY_WIDTH) {
+            // Each bit in colData becomes a pixel in the rotated row
+            // Bit 0 (top) -> rightmost pixel (col 7)
+            // Bit 7 (bottom) -> leftmost pixel (col 0)
+            for (int bit = 0; bit < 8; bit++) {
+                if (colData & (1 << bit)) {
+                    int destCol = 7 - bit;  // Flip for CW rotation
+                    mx->setPoint(destRow, destCol, true);
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Render current scroll frame with 90° CW rotation.
+ * Text scrolls vertically through the rotated display.
  */
 static void render_scroll_frame() {
     if (!mx) return;
 
     mx->clear();
 
+    // With 90° CW rotation:
+    // - Display is 8 pixels wide, DISPLAY_WIDTH pixels tall
+    // - Text scrolls vertically (row position changes)
+    // - Each character is ~6-8 rows tall after rotation
+
+    int row_pos = scroll_pos;
     for (int i = 0; i < scroll_text_len; i++) {
-        int col = scroll_pos + i * 8;
+        char c = scroll_text_buffer[i];
+
+        // Get character width (which becomes height after rotation)
+        uint8_t charWidth = mx->getChar(c, 8, nullptr);
+        if (charWidth == 0) charWidth = 6;  // Default width
 
         // Only render if character is visible
-        if (col > -8 && col < DISPLAY_WIDTH) {
-            mx->setChar(col, scroll_text_buffer[i]);
+        if (row_pos > -8 && row_pos < DISPLAY_WIDTH) {
+            // Render character directly with rotation
+            // Use setPoint for precise control
+            uint8_t buf[8];
+            mx->getChar(c, 8, buf);
+
+            for (uint8_t srcCol = 0; srcCol < charWidth && srcCol < 8; srcCol++) {
+                int destRow = row_pos + srcCol;
+                if (destRow >= 0 && destRow < DISPLAY_WIDTH) {
+                    for (int bit = 0; bit < 8; bit++) {
+                        if (buf[srcCol] & (1 << bit)) {
+                            int destCol = 7 - bit;
+                            mx->setPoint(destRow, destCol, true);
+                        }
+                    }
+                }
+            }
         }
+
+        row_pos += charWidth + 1;  // Move to next character position (with 1 pixel gap)
     }
 }
 
 void led_matrix_init() {
+    // Try different hardware types - GENERIC_HW is most compatible
+    // Other options: FC16_HW, PAROLA_HW, ICSTATION_HW
     mx = new MD_MAX72XX(
-        MD_MAX72XX::FC16_HW,
+        MD_MAX72XX::GENERIC_HW,
         MATRIX_DATA_PIN,
         MATRIX_CLK_PIN,
         MATRIX_CS_PIN,
@@ -122,11 +188,20 @@ void led_matrix_init() {
     );
 
     mx->begin();
-    mx->control(MD_MAX72XX::SHUTDOWN, MD_MAX72XX::OFF);
     mx->control(MD_MAX72XX::INTENSITY, MATRIX_DEFAULT_BRIGHTNESS);
     mx->clear();
 
-    DEBUG_PRINTLN("LED matrix initialized");
+    // Quick test - display all LEDs on briefly to verify hardware works
+    Serial.printf("[MTX] Testing %d matrices (GENERIC_HW) - all LEDs on...\n", MATRIX_NUM_DEVICES);
+    for (int dev = 0; dev < MATRIX_NUM_DEVICES; dev++) {
+        for (int row = 0; row < 8; row++) {
+            mx->setRow(dev, row, 0xFF);
+        }
+    }
+    delay(500);  // Show for 500ms
+    mx->clear();
+
+    Serial.println("[MTX] LED matrix initialized");
 }
 
 void led_matrix_scroll_init(MatrixScrollState* state) {
@@ -187,27 +262,30 @@ void led_matrix_set_scroll_text(MatrixScrollState* state, uint8_t text_id) {
         text = "?";
     }
 
-    // Copy and reverse text for proper scroll direction (like sample does)
+    // Copy text (no reversal needed for rotated display)
     scroll_text_len = strlen(text);
     if (scroll_text_len > 63) scroll_text_len = 63;
 
     strncpy(scroll_text_buffer, text, scroll_text_len);
     scroll_text_buffer[scroll_text_len] = '\0';
 
-    // Reverse so left→right scroll reads correctly
-    reverse_string(scroll_text_buffer, scroll_text_len);
+    // Calculate total text height (in rotated space, ~7 pixels per char + 1 gap)
+    int text_height = scroll_text_len * 7;
 
-    // Start position off screen (negative = text width)
-    int text_width = scroll_text_len * 8;
-    scroll_pos = -text_width;
+    // Start position off screen (negative = above display)
+    scroll_pos = -text_height;
 
     state->scroll_last_update = millis();
     state->current_text_id = text_id;
 }
 
 void led_matrix_update_scroll(MatrixScrollState* state) {
-    if (!mx) return;
-    if (state->mode != MATRIX_MODE_SCROLL) return;
+    if (!mx) {
+        return;
+    }
+    if (state->mode != MATRIX_MODE_SCROLL) {
+        return;
+    }
 
     uint32_t now = millis();
 
@@ -215,6 +293,7 @@ void led_matrix_update_scroll(MatrixScrollState* state) {
     if (scroll_text_len == 0) {
         uint8_t initial_text_id = random(0, SCROLL_TEXT_COUNT);
         led_matrix_set_scroll_text(state, initial_text_id);
+        Serial.printf("[MTX] Init scroll text id=%d: %s\n", initial_text_id, scroll_text_buffer);
     }
 
     // Check if it's time to advance the scroll
@@ -228,6 +307,7 @@ void led_matrix_update_scroll(MatrixScrollState* state) {
         if (scroll_pos > DISPLAY_WIDTH) {
             uint8_t new_text_id = random(0, SCROLL_TEXT_COUNT);
             led_matrix_set_scroll_text(state, new_text_id);
+            Serial.printf("[MTX] New scroll text id=%d\n", new_text_id);
         }
     }
 

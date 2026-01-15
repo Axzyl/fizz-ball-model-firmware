@@ -42,7 +42,7 @@
 #define MATRIX_DATA_PIN 25   // DIN (Data In / MOSI)
 #define MATRIX_CLK_PIN 32    // CLK (Clock / SCK)
 #define MATRIX_CS_PIN 26     // CS (Chip Select / Load)
-#define MATRIX_NUM_DEVICES 2 // Number of 8x8 matrices chained (2x 8x8 = 16 columns)
+#define MATRIX_NUM_DEVICES 2 // Number of 8x8 matrices chained (3x 8x8 = 24 columns)
 
 // -----------------------------------------------------------------------------
 // NeoPixel 5x5 Matrix (One eye)

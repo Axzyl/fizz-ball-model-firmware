@@ -139,7 +139,7 @@ YOLO_MODEL_SIZE = 'n'  # 'small' - good balance of speed and distance detection
 
 # Minimum face width as ratio of frame width (reject faces smaller than this)
 # 0.05 = 5% = ~32 pixels on 640px frame - filters small false positives
-MIN_FACE_WIDTH_RATIO = 0.05
+MIN_FACE_WIDTH_RATIO = 0.04
 
 # -----------------------------------------------------------------------------
 # Facing Detection
@@ -161,7 +161,8 @@ SERVO_DEADZONE = 2.0  # degrees - don't move if target within this range
 # -----------------------------------------------------------------------------
 TRACKING_VELOCITY_GAIN = 0.1  # How fast servo follows face position (0.0-1.0)
 TRACKING_MAX_VELOCITY = 4.0    # Max servo movement per tick in degrees (higher = faster)
-TRACKING_DEADZONE = 0.067       # Fraction of frame width to ignore (0.05 = 5%)
+TRACKING_DEADZONE = 0.05       # Fraction of frame width to ignore (0.05 = 5%)
+TRACKING_MIN_WIDTH_RATIO = 0.06 # Min face width ratio to track (0.15 = 15% of frame width)
 
 # -----------------------------------------------------------------------------
 # Dispensing / Pour Settings

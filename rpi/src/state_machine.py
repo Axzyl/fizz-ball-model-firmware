@@ -104,6 +104,7 @@ class StateMachineConfig:
     tracking_invert_direction: bool = False  # Invert tracking direction
     tracking_base_min: float = 0.0   # Minimum base servo angle
     tracking_base_max: float = 180.0  # Maximum base servo angle
+    tracking_min_width_ratio: float = None  # Min face width to track (as fraction of frame)
 
     # State durations
     collapse_duration: float = None       # Duration of collapse animation (2s)
@@ -139,6 +140,8 @@ class StateMachineConfig:
             self.tracking_deadzone = getattr(config, 'TRACKING_DEADZONE', 0.067)
         if self.tracking_max_velocity is None:
             self.tracking_max_velocity = getattr(config, 'TRACKING_MAX_VELOCITY', 4.0)
+        if self.tracking_min_width_ratio is None:
+            self.tracking_min_width_ratio = getattr(config, 'TRACKING_MIN_WIDTH_RATIO', 0.15)
         # State durations
         if self.collapse_duration is None:
             self.collapse_duration = getattr(config, 'COLLAPSE_DURATION', 2.0)
@@ -202,6 +205,10 @@ class StateMachine:
         # Dark/light tracking for door detection
         self._dark_start_time: float = 0.0   # When darkness started
         self._light_start_time: float = 0.0  # When light started
+
+        # Manual valve override (for dashboard button)
+        self._manual_valve_open: bool = False
+        self._manual_valve_open_time: float = 0.0  # When manual valve was opened
 
     def get_state_name(self) -> str:
         """Get current state name."""
@@ -465,7 +472,7 @@ class StateMachine:
                 self._shake_direction = 1
                 return AliveBehavior.DISPENSE_REJECT
 
-        # Face detection behavior
+        # Face detection behavior (tracking cutoff is separate - handled in velocity calc)
         if face.detected:
             return AliveBehavior.DETECTED
 
@@ -708,6 +715,17 @@ class StateMachine:
             matrix_right=2,  # X
         )
 
+    def _is_face_trackable(self, face: FaceState) -> bool:
+        """Check if face is large enough to be considered for tracking/detection."""
+        if not face.detected or face.bbox is None:
+            return False
+
+        x, y, w, h = face.bbox
+        frame_width = face.frame_width if face.frame_width > 0 else 640
+        face_width_ratio = w / frame_width
+
+        return face_width_ratio >= self.config.tracking_min_width_ratio
+
     def _calculate_tracking_velocity_from_position(self, face: FaceState) -> float:
         """
         Calculate base rotation velocity from face position in frame.
@@ -720,7 +738,7 @@ class StateMachine:
         Returns:
             Velocity to apply to servo (degrees per tick)
         """
-        if not face.detected or face.bbox is None:
+        if not self._is_face_trackable(face):
             return 0.0
 
         x, y, w, h = face.bbox
@@ -772,10 +790,19 @@ class StateMachine:
         matrix_right: int = 0,
     ) -> dict:
         """Create command dictionary."""
+        # Apply manual valve override (dashboard button can force valve open)
+        # Auto-close after pour duration
+        if self._manual_valve_open:
+            elapsed = time.time() - self._manual_valve_open_time
+            if elapsed >= self.config.dispense_duration:
+                self._manual_valve_open = False
+
+        actual_valve_open = valve_open or self._manual_valve_open
+
         return {
             "servo_target_1": servo_target_1,
             "servo_target_2": servo_target_2,
-            "valve_open": valve_open,
+            "valve_open": actual_valve_open,
             "rgb_mode": rgb_mode,
             "rgb_r": rgb_r,
             "rgb_g": rgb_g,
@@ -822,3 +849,16 @@ class StateMachine:
         """Set forced outcome for next collapse (ALIVE, DEAD, or None for random)."""
         if outcome in ("ALIVE", "DEAD", None):
             self.forced_outcome = outcome
+
+    def open_valve(self) -> None:
+        """Manually open the valve (dashboard override). Auto-closes after pour duration."""
+        self._manual_valve_open = True
+        self._manual_valve_open_time = time.time()
+
+    def close_valve(self) -> None:
+        """Manually close the valve (clears override)."""
+        self._manual_valve_open = False
+
+    def is_valve_manually_open(self) -> bool:
+        """Check if valve is manually held open."""
+        return self._manual_valve_open
