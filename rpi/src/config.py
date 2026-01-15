@@ -101,6 +101,7 @@ CAMERA_INDEX = 1
 CAMERA_WIDTH = 640*2
 CAMERA_HEIGHT = 480*2
 CAMERA_FPS = 30
+CAMERA_MAX_FAILURES = 30  # Consecutive failures before declaring disconnect (~1s at 30fps)
 
 # Platform-specific camera backend
 if IS_WINDOWS:
@@ -165,16 +166,19 @@ TRACKING_DEADZONE = 0.067       # Fraction of frame width to ignore (0.05 = 5%)
 # -----------------------------------------------------------------------------
 # Dispensing / Pour Settings
 # -----------------------------------------------------------------------------
-POUR_DURATION = 3.0           # Total pour time in seconds (ALIVE outcome)
-POUR_PARTIAL_RATIO = 0.35     # DEAD Step 2: fraction of total pour (35%)
-POUR_FINAL_RATIO = 0.65       # DEAD Step 5: remaining fraction (65%)
+POUR_DURATION = 2.0           # How long valve stays open when limit switch pressed (seconds)
+DISPENSE_FLASH_DURATION = 2.0 # How long red flash continues after dispense (seconds)
+REJECT_FLASH_DURATION = 1.0   # How long red flash on reject/repeat press (seconds)
 
-# State durations (seconds)
-COLLAPSE_DURATION = 3.0       # Quantum collapse animation duration
-RESET_DURATION = 2.0          # Reset animation duration
-DEAD_TENSION_DURATION = 3.0   # DEAD Step 1: tension buildup
-DEAD_CHAOS_DURATION = 2.0     # DEAD Step 3: violent shaking
-DEAD_DARKNESS_DURATION = 1.0  # DEAD Step 4: all LEDs off
+# -----------------------------------------------------------------------------
+# State Durations (seconds)
+# -----------------------------------------------------------------------------
+COLLAPSE_DURATION = 2.0       # Quantum collapse animation duration (door open)
+
+# -----------------------------------------------------------------------------
+# Arm Wave Settings
+# -----------------------------------------------------------------------------
+ARM_WAVE_INTERVAL = 3.0       # Seconds between periodic arm waves when person detected
 
 # -----------------------------------------------------------------------------
 # Light Control

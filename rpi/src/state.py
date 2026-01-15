@@ -46,6 +46,10 @@ class FaceState:
     frame_height: int = 480
     # The actual frame this detection was made on (for synchronized display)
     processed_frame: Optional[np.ndarray] = None
+    # Dark frame detection (door closed)
+    is_dark: bool = False  # True when frame brightness is below threshold
+    # Camera connection status
+    camera_connected: bool = False  # True when camera is working properly
 
     def clear(self) -> None:
         """Clear face detection results."""
@@ -222,6 +226,8 @@ class AppState:
         frame_width: int = 640,
         frame_height: int = 480,
         processed_frame: Optional[np.ndarray] = None,
+        is_dark: bool = False,
+        camera_connected: bool = True,
     ) -> None:
         """Thread-safe face state update."""
         with self._lock:
@@ -237,6 +243,8 @@ class AppState:
             self._face.num_facing = num_facing
             self._face.frame_width = frame_width
             self._face.frame_height = frame_height
+            self._face.is_dark = is_dark
+            self._face.camera_connected = camera_connected
             self._face.timestamp = time.time()
             # Store the frame this detection was made on (for synchronized display)
             if processed_frame is not None:
@@ -261,12 +269,19 @@ class AppState:
                 num_facing=self._face.num_facing,
                 frame_width=self._face.frame_width,
                 frame_height=self._face.frame_height,
+                is_dark=self._face.is_dark,
+                camera_connected=self._face.camera_connected,
             )
 
     def clear_face(self) -> None:
         """Thread-safe clear face detection."""
         with self._lock:
             self._face.clear()
+
+    def set_camera_connected(self, connected: bool) -> None:
+        """Thread-safe update of camera connection status."""
+        with self._lock:
+            self._face.camera_connected = connected
 
     # -------------------------------------------------------------------------
     # ESP State Access
@@ -520,6 +535,8 @@ class AppState:
                 timestamp=self._face.timestamp,
                 num_faces=self._face.num_faces,
                 num_facing=self._face.num_facing,
+                is_dark=self._face.is_dark,
+                camera_connected=self._face.camera_connected,
             )
 
             esp = EspState(

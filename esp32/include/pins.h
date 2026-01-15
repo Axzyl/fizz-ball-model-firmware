@@ -32,8 +32,8 @@
 // -----------------------------------------------------------------------------
 // RGB LED Strip (Common Anode or PWM-controlled)
 // -----------------------------------------------------------------------------
-#define RGB_PIN_R 27 // Red channel PWM
-#define RGB_PIN_G 14 // Green channel PWM
+#define RGB_PIN_R 14 // Red channel PWM
+#define RGB_PIN_G 27 // Green channel PWM
 #define RGB_PIN_B 12 // Blue channel PWM
 
 // -----------------------------------------------------------------------------
@@ -42,7 +42,7 @@
 #define MATRIX_DATA_PIN 25   // DIN (Data In / MOSI)
 #define MATRIX_CLK_PIN 32    // CLK (Clock / SCK)
 #define MATRIX_CS_PIN 26     // CS (Chip Select / Load)
-#define MATRIX_NUM_DEVICES 1 // Number of 8x8 matrices chained
+#define MATRIX_NUM_DEVICES 2 // Number of 8x8 matrices chained (2x 8x8 = 16 columns)
 
 // -----------------------------------------------------------------------------
 // NeoPixel 5x5 Matrix (One eye)
@@ -65,12 +65,12 @@
 //    9   | Test LED           | Output    | Status indicator
 //   12   | RGB Blue           | Output    | PWM (5kHz)
 //   13   | NeoPixel Matrix    | Output    | 5x5 RGB matrix data
-//   14   | RGB Green          | Output    | PWM (5kHz)
+//   14   | RGB Red            | Output    | PWM (5kHz)
 //   15   | Servo 2 (Arm)      | Output    | 50Hz PWM signal
 //   16   | NeoPixel Ring      | Output    | 8-LED ring data
 //   25   | Matrix Data (DIN)  | Output    | MAX7219 SPI MOSI
 //   26   | Matrix CS (Load)   | Output    | MAX7219 SPI chip select
-//   27   | RGB Red            | Output    | PWM (5kHz)
+//   27   | RGB Green          | Output    | PWM (5kHz)
 //   32   | Matrix Clock       | Output    | MAX7219 SPI SCK
 //   33   | Limit Switch       | Input     | Internal pullup, active LOW
 //

@@ -1,20 +1,23 @@
 """UART protocol encoding and decoding.
 
 Multi-message protocol format:
-- $SRV,<s1>,<s2>,<s3>             - Servo targets (sent at 50Hz)
-- $LGT,<cmd>                       - Light command (sent on change)
-- $RGB,<mode>,<r>,<g>,<b>          - RGB strip (mode 0=solid, 1=rainbow)
-- $MTX,<left>,<right>              - MAX7219 patterns (sent on change)
-- $NPM,<mode>,<letter>,<r>,<g>,<b> - NeoPixel matrix (sent on change)
-- $NPR,<mode>,<r>,<g>,<b>          - NeoPixel ring (sent on change)
-- $FLG,<flags>                     - Command flags (sent on change)
-- $VLV,<open>                      - Valve command: 0=close, 1=open (auto-closes after 5s)
+- $SRV,<s1>,<s2>,<s3>                         - Servo targets (sent at 50Hz)
+- $LGT,<cmd>                                   - Light command (sent on change)
+- $RGB,<mode>,<r>,<g>,<b>[,<r2>,<g2>,<b2>,<speed>] - RGB strip (extended for gradient)
+- $MTX,<left>,<right>                          - MAX7219 patterns (sent on change)
+- $NPM,<mode>,<letter>,<r>,<g>,<b>[,<r2>,<g2>,<b2>,<speed>] - NeoPixel matrix
+- $NPR,<mode>,<r>,<g>,<b>[,<r2>,<g2>,<b2>,<speed>]          - NeoPixel ring
+- $FLG,<flags>                                 - Command flags (sent on change)
+- $VLV,<open>                                  - Valve command: 0=close, 1=open
+
+RGB/NPM/NPR extended fields (optional, for gradient mode):
+- r2, g2, b2: Second color (0-255)
+- speed: Animation speed (1-50)
 
 Status from ESP32:
 - $STS,<limit>,<s1>,<s2>,<s3>,<light>,<flags>,<test>,<valve_open>,<valve_enabled>,<valve_ms>
 
-Note: Valve is simplified - just open/close commands. Auto-closes after 5 seconds.
-      Emergency stop ($EST) command is deprecated and ignored by ESP32.
+Note: Valve auto-closes after 5 seconds. Extended fields are backwards compatible.
 """
 
 from __future__ import annotations
@@ -53,6 +56,9 @@ SCROLL_TEXT_BOX = '7'           # "BOX"
 SCROLL_TEXT_CHEERS = '8'        # "CHEERS"
 SCROLL_TEXT_DRINK = '9'         # "DRINK"
 
+# NeoPixel Matrix gradient mode
+NPM_MODE_GRADIENT = 9  # Ping-pong gradient between 2 colors
+
 # NeoPixel Ring modes
 NPR_MODE_OFF = 0      # All LEDs off
 NPR_MODE_SOLID = 1    # Solid color fill
@@ -60,10 +66,12 @@ NPR_MODE_RAINBOW = 2  # Rainbow wave animation
 NPR_MODE_CHASE = 3    # Single LED chase animation
 NPR_MODE_BREATHE = 4  # Breathing/pulse effect
 NPR_MODE_SPINNER = 5  # Spinning dot animation
+NPR_MODE_GRADIENT = 6 # Ping-pong gradient between 2 colors
 
-# RGB Strip modes
+# RGB Strip modes (matches ESP32 protocol)
 RGB_MODE_SOLID = 0    # Static solid color
-RGB_MODE_RAINBOW = 1  # Cycling rainbow animation
+RGB_MODE_RAINBOW = 1  # Rainbow animation
+RGB_MODE_GRADIENT = 2 # Ping-pong gradient between 2 colors
 
 
 @dataclass
@@ -190,23 +198,44 @@ class Protocol:
         cmd = max(0, min(2, cmd))
         return f"$LGT,{cmd}\n".encode("ascii")
 
-    def create_rgb_message(self, mode: int, r: int, g: int, b: int) -> bytes:
+    def create_rgb_message(
+        self,
+        mode: int,
+        r: int,
+        g: int,
+        b: int,
+        r2: int = 0,
+        g2: int = 0,
+        b2: int = 0,
+        speed: int = 10,
+    ) -> bytes:
         """
         Create RGB strip message.
 
         Args:
-            mode: RGB mode (RGB_MODE_SOLID=0, RGB_MODE_RAINBOW=1)
+            mode: RGB mode (RGB_MODE_OFF=0, RGB_MODE_SOLID=1, RGB_MODE_GRADIENT=2)
             r: Red value (0-255)
             g: Green value (0-255)
             b: Blue value (0-255)
+            r2: Second color red (0-255, for gradient mode)
+            g2: Second color green (0-255, for gradient mode)
+            b2: Second color blue (0-255, for gradient mode)
+            speed: Animation speed (1-50, for gradient mode)
 
         Returns:
-            Encoded message bytes: $RGB,<mode>,<r>,<g>,<b>\n
+            Encoded message bytes: $RGB,<mode>,<r>,<g>,<b>[,<r2>,<g2>,<b2>,<speed>]\n
         """
-        mode = max(0, min(1, mode))
+        mode = max(0, min(2, mode))
         r = max(0, min(255, r))
         g = max(0, min(255, g))
         b = max(0, min(255, b))
+        r2 = max(0, min(255, r2))
+        g2 = max(0, min(255, g2))
+        b2 = max(0, min(255, b2))
+        speed = max(1, min(50, speed))
+
+        if mode == RGB_MODE_GRADIENT:
+            return f"$RGB,{mode},{r},{g},{b},{r2},{g2},{b2},{speed}\n".encode("ascii")
         return f"$RGB,{mode},{r},{g},{b}\n".encode("ascii")
 
     def create_matrix_message(self, left: int, right: int) -> bytes:
@@ -229,6 +258,10 @@ class Protocol:
         r: int,
         g: int,
         b: int,
+        r2: int = 0,
+        g2: int = 0,
+        b2: int = 0,
+        speed: int = 10,
     ) -> bytes:
         """
         Create NeoPixel matrix message.
@@ -239,15 +272,26 @@ class Protocol:
             r: Red value (0-255)
             g: Green value (0-255)
             b: Blue value (0-255)
+            r2: Second color red (0-255, for gradient mode)
+            g2: Second color green (0-255, for gradient mode)
+            b2: Second color blue (0-255, for gradient mode)
+            speed: Animation speed (1-50, for gradient mode)
 
         Returns:
-            Encoded message bytes: $NPM,<mode>,<letter>,<r>,<g>,<b>\n
+            Encoded message bytes: $NPM,<mode>,<letter>,<r>,<g>,<b>[,<r2>,<g2>,<b2>,<speed>]\n
         """
         r = max(0, min(255, r))
         g = max(0, min(255, g))
         b = max(0, min(255, b))
+        r2 = max(0, min(255, r2))
+        g2 = max(0, min(255, g2))
+        b2 = max(0, min(255, b2))
+        speed = max(1, min(50, speed))
         # Ensure single character
         letter = letter[0] if letter else "A"
+
+        if mode == NPM_MODE_GRADIENT:
+            return f"$NPM,{mode},{letter},{r},{g},{b},{r2},{g2},{b2},{speed}\n".encode("ascii")
         return f"$NPM,{mode},{letter},{r},{g},{b}\n".encode("ascii")
 
     def create_npr_message(
@@ -256,6 +300,10 @@ class Protocol:
         r: int,
         g: int,
         b: int,
+        r2: int = 0,
+        g2: int = 0,
+        b2: int = 0,
+        speed: int = 10,
     ) -> bytes:
         """
         Create NeoPixel ring message.
@@ -265,13 +313,24 @@ class Protocol:
             r: Red value (0-255)
             g: Green value (0-255)
             b: Blue value (0-255)
+            r2: Second color red (0-255, for gradient mode)
+            g2: Second color green (0-255, for gradient mode)
+            b2: Second color blue (0-255, for gradient mode)
+            speed: Animation speed (1-50, for gradient mode)
 
         Returns:
-            Encoded message bytes: $NPR,<mode>,<r>,<g>,<b>\n
+            Encoded message bytes: $NPR,<mode>,<r>,<g>,<b>[,<r2>,<g2>,<b2>,<speed>]\n
         """
         r = max(0, min(255, r))
         g = max(0, min(255, g))
         b = max(0, min(255, b))
+        r2 = max(0, min(255, r2))
+        g2 = max(0, min(255, g2))
+        b2 = max(0, min(255, b2))
+        speed = max(1, min(50, speed))
+
+        if mode == NPR_MODE_GRADIENT:
+            return f"$NPR,{mode},{r},{g},{b},{r2},{g2},{b2},{speed}\n".encode("ascii")
         return f"$NPR,{mode},{r},{g},{b}\n".encode("ascii")
 
     def create_flags_message(self, flags: int) -> bytes:

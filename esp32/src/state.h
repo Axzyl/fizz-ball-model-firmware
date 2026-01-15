@@ -31,10 +31,14 @@ typedef struct {
     uint8_t flags;              // Reserved flags
 
     // RGB strip
-    uint8_t rgb_mode;           // 0=solid, 1=rainbow
+    uint8_t rgb_mode;           // 0=solid, 1=rainbow, 2=gradient
     uint8_t rgb_r;              // RGB red value (0-255)
     uint8_t rgb_g;              // RGB green value (0-255)
     uint8_t rgb_b;              // RGB blue value (0-255)
+    uint8_t rgb_r2;             // Gradient: second color red (0-255)
+    uint8_t rgb_g2;             // Gradient: second color green (0-255)
+    uint8_t rgb_b2;             // Gradient: second color blue (0-255)
+    uint8_t rgb_gradient_speed; // Gradient: animation speed (1-50)
 
     // MAX7219 matrix
     uint8_t matrix_left;        // Left matrix pattern ID
@@ -46,12 +50,20 @@ typedef struct {
     uint8_t npm_r;              // Red value (0-255)
     uint8_t npm_g;              // Green value (0-255)
     uint8_t npm_b;              // Blue value (0-255)
+    uint8_t npm_r2;             // Gradient: second color red (0-255)
+    uint8_t npm_g2;             // Gradient: second color green (0-255)
+    uint8_t npm_b2;             // Gradient: second color blue (0-255)
+    uint8_t npm_gradient_speed; // Gradient: animation speed (1-50)
 
     // NeoPixel ring
     uint8_t npr_mode;           // NPR_MODE_* (0=off, 1=solid, etc.)
     uint8_t npr_r;              // Red value (0-255)
     uint8_t npr_g;              // Green value (0-255)
     uint8_t npr_b;              // Blue value (0-255)
+    uint8_t npr_r2;             // Gradient: second color red (0-255)
+    uint8_t npr_g2;             // Gradient: second color green (0-255)
+    uint8_t npr_b2;             // Gradient: second color blue (0-255)
+    uint8_t npr_gradient_speed; // Gradient: animation speed (1-50)
 
     // Valve control
     bool valve_open;            // True to open valve

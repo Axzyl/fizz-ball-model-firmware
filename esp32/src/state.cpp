@@ -29,6 +29,10 @@ void state_init(DeviceState* state) {
     state->command.rgb_r = 0;
     state->command.rgb_g = 0;
     state->command.rgb_b = 0;
+    state->command.rgb_r2 = 0;
+    state->command.rgb_g2 = 0;
+    state->command.rgb_b2 = 0;
+    state->command.rgb_gradient_speed = 10;
 
     // MAX7219 matrix - will scroll text (handled separately)
     state->command.matrix_left = 0;   // Not used for scroll mode
@@ -40,12 +44,20 @@ void state_init(DeviceState* state) {
     state->command.npm_r = 0;
     state->command.npm_g = 0;
     state->command.npm_b = 0;
+    state->command.npm_r2 = 0;
+    state->command.npm_g2 = 0;
+    state->command.npm_b2 = 0;
+    state->command.npm_gradient_speed = 10;
 
     // NeoPixel ring - OFF by default
     state->command.npr_mode = 0;
     state->command.npr_r = 0;
     state->command.npr_g = 0;
     state->command.npr_b = 0;
+    state->command.npr_r2 = 0;
+    state->command.npr_g2 = 0;
+    state->command.npr_b2 = 0;
+    state->command.npr_gradient_speed = 10;
 
     // Valve control
     state->command.valve_open = false;

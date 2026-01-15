@@ -59,13 +59,11 @@ class TelemetryPanel:
 
     # State colors (BGR format)
     STATE_COLORS = {
-        "IDLE": (180, 100, 180),      # Purple
-        "TRACKING": (200, 150, 50),   # Blue
-        "COLLAPSE": (255, 255, 255),  # White
-        "ALIVE": (100, 200, 100),     # Green
-        "DEAD": (100, 100, 200),      # Red
-        "RESET": (150, 150, 150),     # Gray
-        "FAULT": (50, 100, 200),      # Orange
+        "INACTIVE": (80, 80, 80),      # Dark gray
+        "COLLAPSE": (255, 255, 255),   # White
+        "ALIVE": (100, 200, 100),      # Green
+        "DEAD": (100, 100, 200),       # Red
+        "FAULT": (50, 100, 200),       # Orange
     }
 
     def __init__(
@@ -217,6 +215,8 @@ class TelemetryPanel:
         y = self._draw_section_header(panel, "SYSTEM", y)
         y = self._draw_value(panel, "FPS", f"{system.fps:.1f}", y)
         y = self._draw_value(panel, "Tracker FPS", f"{system.face_tracker_fps:.1f}", y)
+        y = self._draw_value(panel, "Camera", "Connected" if face.camera_connected else "Disconnected", y,
+                             config.COLOR_FACING_YES if face.camera_connected else config.COLOR_FACING_NO)
         y = self._draw_value(panel, "UART", "Connected" if esp.connected else "Disconnected", y,
                              config.COLOR_FACING_YES if esp.connected else config.COLOR_FACING_NO)
         y = self._draw_value(panel, "UART TX", str(system.uart_tx_count), y)
@@ -710,10 +710,8 @@ class TelemetryPanel:
         dispensing_enabled = self.state_machine.dispensing_enabled
         forced_outcome = self.state_machine.forced_outcome
 
-        # Get sub-state for DEAD
-        dead_sub = ""
-        if state_name == "DEAD":
-            dead_sub = self.state_machine.get_dead_sub_state_name()
+        # Get behavior name for ALIVE/DEAD states
+        behavior_name = self.state_machine.get_behavior_name()
 
         state_color = self.STATE_COLORS.get(state_name, (200, 200, 200))
 
@@ -742,10 +740,10 @@ class TelemetryPanel:
 
         # Draw state name (large, centered)
         display_text = state_name
-        if dead_sub:
-            display_text = f"{state_name}: {dead_sub}"
+        if behavior_name:
+            display_text = f"{state_name}: {behavior_name}"
 
-        text_size = cv2.getTextSize(display_text, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)[0]
+        text_size = cv2.getTextSize(display_text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
         text_x = box_x + (box_width - text_size[0]) // 2
         text_y = y + (box_height + text_size[1]) // 2
         # Text color: black for light backgrounds, white for dark
@@ -790,15 +788,16 @@ class TelemetryPanel:
         else:
             y = self._draw_button(panel, "Enable Dispensing", "enable_dispensing", y)
 
+        y = self._draw_button(panel, "Open Valve", "open_valve", y)
         y = self._draw_button(panel, "Close Valve", "close_valve", y)
-        y = self._draw_button(panel, "Force Reset", "force_reset", y)
+        y = self._draw_button(panel, "Force Inactive", "force_inactive", y)
 
         # Context-sensitive buttons
-        if state_name == "TRACKING":
+        if state_name in ["ALIVE", "DEAD"]:
             y = self._draw_button(panel, "Force Collapse", "force_collapse", y)
 
-        if state_name in ["COLLAPSE", "ALIVE", "DEAD"]:
-            y = self._draw_button(panel, "Skip Animation", "skip_animation", y)
+        if state_name == "COLLAPSE":
+            y = self._draw_button(panel, "Skip Collapse", "skip_animation", y)
 
         y += 5
 

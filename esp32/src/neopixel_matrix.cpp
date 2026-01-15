@@ -1,5 +1,6 @@
 #include "neopixel_matrix.h"
 #include "scroll_texts.h"
+#include "color_utils.h"
 #include <string.h>
 
 // NeoPixel strip object
@@ -37,12 +38,13 @@ static const uint8_t font5x5[26][5] = {
 };
 
 // Eye closed pattern (horizontal line across middle - sleeping eye)
+// Note: Matrix is physically rotated 90°, so we light middle column
 static const uint8_t eye_closed_pattern[5] = {
-    0b00000,
-    0b00000,
-    0b11111,  // Middle row lit
-    0b00000,
-    0b00000
+    0b00100,
+    0b00100,
+    0b00100,
+    0b00100,
+    0b00100
 };
 
 // Eye open pattern (circle/dot in center - alert eye)
@@ -128,16 +130,33 @@ void npm_state_init(NpmState* state) {
     state->scroll_looping = true;
     state->prev_scroll_text_id = 255;
     memset(state->scroll_buffer, 0, sizeof(state->scroll_buffer));
+
+    // Initialize gradient state
+    state->r2 = 0;
+    state->g2 = 0;
+    state->b2 = 0;
+    state->gradient_speed = 10;
+    state->gradient_position = 0;
 }
 
-void npm_set_mode(NpmState* state, uint8_t mode, char letter, uint8_t r, uint8_t g, uint8_t b) {
+void npm_set_mode(NpmState* state, uint8_t mode, char letter, uint8_t r, uint8_t g, uint8_t b,
+                  uint8_t r2, uint8_t g2, uint8_t b2, uint8_t speed) {
     // Check if anything changed
     if (state->mode != mode ||
         state->letter != letter ||
         state->r != r ||
         state->g != g ||
-        state->b != b) {
+        state->b != b ||
+        state->r2 != r2 ||
+        state->g2 != g2 ||
+        state->b2 != b2 ||
+        state->gradient_speed != speed) {
         state->needs_update = true;
+
+        // Reset gradient animation on mode change
+        if (state->mode != mode) {
+            state->gradient_position = 0;
+        }
     }
 
     state->mode = mode;
@@ -145,6 +164,10 @@ void npm_set_mode(NpmState* state, uint8_t mode, char letter, uint8_t r, uint8_t
     state->r = r;
     state->g = g;
     state->b = b;
+    state->r2 = r2;
+    state->g2 = g2;
+    state->b2 = b2;
+    state->gradient_speed = (speed > 0) ? speed : 1;  // Ensure minimum speed of 1
 
     // For scroll mode, interpret letter as text ID
     // '0'-'9' maps to text IDs 0-9, 'A'-'Z' maps to 0-25 as fallback
@@ -224,6 +247,33 @@ void npm_update(NpmState* state) {
                 npm_display_x(state->r, state->g, state->b);
             }
             break;
+
+        case NPM_MODE_GRADIENT: {
+            // Ping-pong gradient between two colors
+            uint8_t t = gradient_position_to_t(state->gradient_position);
+
+            uint8_t r, g, b;
+            gradient_color(t, state->r, state->g, state->b,
+                          state->r2, state->g2, state->b2, &r, &g, &b);
+
+            // Skip update if lerp produced black (edge case bug workaround)
+            if (r == 0 && g == 0 && b == 0) {
+                state->gradient_position = gradient_advance_pingpong(
+                    state->gradient_position, state->gradient_speed);
+                return;
+            }
+
+            uint32_t color = npm_strip->Color(r, g, b);
+            for (int i = 0; i < NPM_NUM_PIXELS; i++) {
+                npm_strip->setPixelColor(i, color);
+            }
+            npm_strip->show();
+
+            state->gradient_position = gradient_advance_pingpong(
+                state->gradient_position, state->gradient_speed);
+            state->prev_mode = state->mode;
+            return;
+        }
 
         default:
             npm_clear();

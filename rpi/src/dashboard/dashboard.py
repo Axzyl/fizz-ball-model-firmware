@@ -322,15 +322,18 @@ class Dashboard:
         elif button_name == "enable_dispensing" and self.state_machine:
             self.state_machine.enable_dispensing()
             logger.info("Dispensing re-enabled")
-        elif button_name == "force_reset" and self.state_machine:
-            self.state_machine.force_reset()
-            logger.info("Force reset triggered")
+        elif button_name == "force_inactive" and self.state_machine:
+            self.state_machine.force_inactive()
+            logger.info("Force inactive triggered")
         elif button_name == "force_collapse" and self.state_machine:
             self.state_machine.force_collapse()
             logger.info("Force collapse triggered")
         elif button_name == "skip_animation" and self.state_machine:
             self.state_machine.skip_animation()
             logger.info("Skip animation triggered")
+        elif button_name == "open_valve":
+            self.state.set_command(valve_open=True)
+            logger.info("Valve opened")
         elif button_name == "close_valve":
             self.state.set_command(valve_open=False)
             logger.info("Valve closed")

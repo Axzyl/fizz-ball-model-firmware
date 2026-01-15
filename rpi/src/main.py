@@ -38,6 +38,13 @@ class VisionThread(threading.Thread):
     - Frame and detection results are always matched
     """
 
+    # Dark frame threshold - frames below this mean brightness are considered "dark"
+    # (door closed). CV is skipped to save CPU.
+    DARK_THRESHOLD = 15  # 0-255 scale
+
+    # Camera connection tracking - use config value or default
+    MAX_CONSECUTIVE_FAILURES = getattr(config, 'CAMERA_MAX_FAILURES', 30)
+
     def __init__(
         self,
         state: AppState,
@@ -52,6 +59,10 @@ class VisionThread(threading.Thread):
         # FPS tracking (same as vision_servo_test.py)
         self.fps_times: list[float] = []
         self.fps = 0.0
+
+        # Camera connection tracking
+        self.consecutive_failures = 0
+        self.camera_connected = False
 
     def run(self) -> None:
         """Main vision loop - identical structure to vision_servo_test.py"""
@@ -69,6 +80,7 @@ class VisionThread(threading.Thread):
         if not self.cap.isOpened():
             logger.error(f"Failed to open camera {camera_index}")
             self.state.add_error("Failed to open camera")
+            self.state.set_camera_connected(False)
             return
 
         actual_w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -88,47 +100,79 @@ class VisionThread(threading.Thread):
             # Capture frame (same as vision_servo_test.py)
             ret, frame = self.cap.read()
             if not ret:
+                self.consecutive_failures += 1
+                if self.consecutive_failures >= self.MAX_CONSECUTIVE_FAILURES:
+                    if self.camera_connected:
+                        logger.error("Camera disconnected (too many consecutive failures)")
+                        self.state.add_error("Camera disconnected")
+                    self.camera_connected = False
+                    self.state.set_camera_connected(False)
                 logger.warning("Failed to capture frame")
                 time.sleep(0.01)
                 continue
 
-            # Process frame with face tracker (same as vision_servo_test.py)
-            result = self.tracker.process(frame)
+            # Successful frame read - reset failure counter
+            self.consecutive_failures = 0
+            if not self.camera_connected:
+                logger.info("Camera reconnected")
+            self.camera_connected = True
 
             # Get actual frame dimensions (same as vision_servo_test.py)
             frame_h, frame_w = frame.shape[:2]
 
-            # Update state with face detection results
-            if result["detected"] and result["bbox"]:
-                x, y, w, h = result["bbox"]
+            # Check if frame is too dark (door closed) - skip CV to save CPU
+            frame_brightness = frame.mean()
+            is_dark = frame_brightness < self.DARK_THRESHOLD
 
-                # Get multi-face info if available
-                all_faces = result.get("all_faces", [])
-                num_faces = len(all_faces) if all_faces else 1
-                num_facing = sum(1 for f in all_faces if f.get("is_facing", False)) if all_faces else (1 if result.get("is_facing") else 0)
-
-                self.state.update_face(
-                    detected=True,
-                    bbox=result["bbox"],
-                    landmarks=result["landmarks"],
-                    yaw=result["yaw"],
-                    pitch=result["pitch"],
-                    roll=result["roll"],
-                    is_facing=result["is_facing"],
-                    confidence=result["confidence"],
-                    num_faces=num_faces,
-                    num_facing=num_facing,
-                    frame_width=frame_w,
-                    frame_height=frame_h,
-                    processed_frame=frame,
-                )
-            else:
+            if is_dark:
+                # Skip CV processing, just report dark frame
                 self.state.update_face(
                     detected=False,
                     frame_width=frame_w,
                     frame_height=frame_h,
                     processed_frame=frame,
+                    is_dark=True,
+                    camera_connected=True,
                 )
+            else:
+                # Process frame with face tracker (same as vision_servo_test.py)
+                result = self.tracker.process(frame)
+
+                # Update state with face detection results
+                if result["detected"] and result["bbox"]:
+                    x, y, w, h = result["bbox"]
+
+                    # Get multi-face info if available
+                    all_faces = result.get("all_faces", [])
+                    num_faces = len(all_faces) if all_faces else 1
+                    num_facing = sum(1 for f in all_faces if f.get("is_facing", False)) if all_faces else (1 if result.get("is_facing") else 0)
+
+                    self.state.update_face(
+                        detected=True,
+                        bbox=result["bbox"],
+                        landmarks=result["landmarks"],
+                        yaw=result["yaw"],
+                        pitch=result["pitch"],
+                        roll=result["roll"],
+                        is_facing=result["is_facing"],
+                        confidence=result["confidence"],
+                        num_faces=num_faces,
+                        num_facing=num_facing,
+                        frame_width=frame_w,
+                        frame_height=frame_h,
+                        processed_frame=frame,
+                        is_dark=False,
+                        camera_connected=True,
+                    )
+                else:
+                    self.state.update_face(
+                        detected=False,
+                        frame_width=frame_w,
+                        frame_height=frame_h,
+                        processed_frame=frame,
+                        is_dark=False,
+                        camera_connected=True,
+                    )
 
             # Update FPS (same as vision_servo_test.py)
             now = time.time()

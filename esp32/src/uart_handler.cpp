@@ -74,29 +74,41 @@ static bool parse_light_packet(const char* buffer, DeviceState* state) {
 
 /**
  * Parse an RGB strip command packet.
- * Format: $RGB,<mode>,<r>,<g>,<b>
+ * Format: $RGB,<mode>,<r>,<g>,<b>[,<r2>,<g2>,<b2>,<speed>]
+ * Extended format adds gradient parameters (backwards compatible)
  */
 static bool parse_rgb_packet(const char* buffer, DeviceState* state) {
     int mode, r, g, b;
+    int r2 = 0, g2 = 0, b2 = 0, speed = 10;  // Defaults for gradient
 
-    int parsed = sscanf(buffer + 5, "%d,%d,%d,%d", &mode, &r, &g, &b);
+    int parsed = sscanf(buffer + 5, "%d,%d,%d,%d,%d,%d,%d,%d",
+                        &mode, &r, &g, &b, &r2, &g2, &b2, &speed);
 
-    if (parsed != 4) {
+    if (parsed < 4) {
         DEBUG_PRINTF("RGB parse error: got %d fields\n", parsed);
         return false;
     }
 
-    mode = constrain(mode, 0, 1);
+    mode = constrain(mode, 0, 2);  // 0=OFF, 1=SOLID, 2=GRADIENT
     r = constrain(r, 0, 255);
     g = constrain(g, 0, 255);
     b = constrain(b, 0, 255);
+    r2 = constrain(r2, 0, 255);
+    g2 = constrain(g2, 0, 255);
+    b2 = constrain(b2, 0, 255);
+    speed = constrain(speed, 1, 50);
 
     state->command.rgb_mode = (uint8_t)mode;
     state->command.rgb_r = (uint8_t)r;
     state->command.rgb_g = (uint8_t)g;
     state->command.rgb_b = (uint8_t)b;
+    state->command.rgb_r2 = (uint8_t)r2;
+    state->command.rgb_g2 = (uint8_t)g2;
+    state->command.rgb_b2 = (uint8_t)b2;
+    state->command.rgb_gradient_speed = (uint8_t)speed;
 
-    DEBUG_PRINTF("RGB: mode=%d, (%d,%d,%d)\n", mode, r, g, b);
+    DEBUG_PRINTF("RGB: mode=%d, (%d,%d,%d)->(%d,%d,%d) speed=%d\n",
+                 mode, r, g, b, r2, g2, b2, speed);
     return true;
 }
 
@@ -123,16 +135,19 @@ static bool parse_matrix_packet(const char* buffer, DeviceState* state) {
 
 /**
  * Parse a NeoPixel matrix command packet.
- * Format: $NPM,<mode>,<letter>,<r>,<g>,<b>
+ * Format: $NPM,<mode>,<letter>,<r>,<g>,<b>[,<r2>,<g2>,<b2>,<speed>]
+ * Extended format adds gradient parameters (backwards compatible)
  */
 static bool parse_npm_packet(const char* buffer, DeviceState* state) {
     int mode;
     char letter;
     int r, g, b;
+    int r2 = 0, g2 = 0, b2 = 0, speed = 10;  // Defaults for gradient
 
-    int parsed = sscanf(buffer + 5, "%d,%c,%d,%d,%d", &mode, &letter, &r, &g, &b);
+    int parsed = sscanf(buffer + 5, "%d,%c,%d,%d,%d,%d,%d,%d,%d",
+                        &mode, &letter, &r, &g, &b, &r2, &g2, &b2, &speed);
 
-    if (parsed != 5) {
+    if (parsed < 5) {
         DEBUG_PRINTF("NPM parse error: got %d fields\n", parsed);
         return false;
     }
@@ -141,27 +156,39 @@ static bool parse_npm_packet(const char* buffer, DeviceState* state) {
     r = constrain(r, 0, 255);
     g = constrain(g, 0, 255);
     b = constrain(b, 0, 255);
+    r2 = constrain(r2, 0, 255);
+    g2 = constrain(g2, 0, 255);
+    b2 = constrain(b2, 0, 255);
+    speed = constrain(speed, 1, 50);
 
     state->command.npm_mode = (uint8_t)mode;
     state->command.npm_letter = letter;
     state->command.npm_r = (uint8_t)r;
     state->command.npm_g = (uint8_t)g;
     state->command.npm_b = (uint8_t)b;
+    state->command.npm_r2 = (uint8_t)r2;
+    state->command.npm_g2 = (uint8_t)g2;
+    state->command.npm_b2 = (uint8_t)b2;
+    state->command.npm_gradient_speed = (uint8_t)speed;
 
-    DEBUG_PRINTF("NPM: mode=%d, letter=%c, (%d,%d,%d)\n", mode, letter, r, g, b);
+    DEBUG_PRINTF("NPM: mode=%d, letter=%c, (%d,%d,%d)->(%d,%d,%d) speed=%d\n",
+                 mode, letter, r, g, b, r2, g2, b2, speed);
     return true;
 }
 
 /**
  * Parse a NeoPixel ring command packet.
- * Format: $NPR,<mode>,<r>,<g>,<b>
+ * Format: $NPR,<mode>,<r>,<g>,<b>[,<r2>,<g2>,<b2>,<speed>]
+ * Extended format adds gradient parameters (backwards compatible)
  */
 static bool parse_npr_packet(const char* buffer, DeviceState* state) {
     int mode, r, g, b;
+    int r2 = 0, g2 = 0, b2 = 0, speed = 10;  // Defaults for gradient
 
-    int parsed = sscanf(buffer + 5, "%d,%d,%d,%d", &mode, &r, &g, &b);
+    int parsed = sscanf(buffer + 5, "%d,%d,%d,%d,%d,%d,%d,%d",
+                        &mode, &r, &g, &b, &r2, &g2, &b2, &speed);
 
-    if (parsed != 4) {
+    if (parsed < 4) {
         DEBUG_PRINTF("NPR parse error: got %d fields\n", parsed);
         return false;
     }
@@ -170,13 +197,22 @@ static bool parse_npr_packet(const char* buffer, DeviceState* state) {
     r = constrain(r, 0, 255);
     g = constrain(g, 0, 255);
     b = constrain(b, 0, 255);
+    r2 = constrain(r2, 0, 255);
+    g2 = constrain(g2, 0, 255);
+    b2 = constrain(b2, 0, 255);
+    speed = constrain(speed, 1, 50);
 
     state->command.npr_mode = (uint8_t)mode;
     state->command.npr_r = (uint8_t)r;
     state->command.npr_g = (uint8_t)g;
     state->command.npr_b = (uint8_t)b;
+    state->command.npr_r2 = (uint8_t)r2;
+    state->command.npr_g2 = (uint8_t)g2;
+    state->command.npr_b2 = (uint8_t)b2;
+    state->command.npr_gradient_speed = (uint8_t)speed;
 
-    DEBUG_PRINTF("NPR: mode=%d, (%d,%d,%d)\n", mode, r, g, b);
+    DEBUG_PRINTF("NPR: mode=%d, (%d,%d,%d)->(%d,%d,%d) speed=%d\n",
+                 mode, r, g, b, r2, g2, b2, speed);
     return true;
 }
 

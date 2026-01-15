@@ -38,8 +38,8 @@
 
 // Valve servo settings (Servo 3 = index 2)
 #define VALVE_SERVO_INDEX   2       // Servo index for valve control
-#define VALVE_CLOSED_ANGLE  0.0f    // Valve closed position
-#define VALVE_OPEN_ANGLE    180.0f  // Valve open position
+#define VALVE_CLOSED_ANGLE  0.0f    // Valve closed position (default start)
+#define VALVE_OPEN_ANGLE    90.0f   // Valve open position
 
 // =============================================================================
 // RGB Strip Settings

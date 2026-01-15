@@ -20,15 +20,11 @@
 #define MATRIX_MODE_SCROLL      1   // Scroll text
 
 // Scroll configuration
-#define MATRIX_SCROLL_SPEED     80  // ms per column shift
-#define MATRIX_SCROLL_BUFFER_SIZE 256  // Max columns in scroll buffer
+#define MATRIX_SCROLL_SPEED     100  // ms per column shift (like sample)
 
-// Scroll state structure
+// Scroll state structure (simplified - text buffer is in cpp file)
 typedef struct {
     uint8_t mode;                   // MATRIX_MODE_PATTERN or MATRIX_MODE_SCROLL
-    uint8_t scroll_buffer[MATRIX_SCROLL_BUFFER_SIZE];  // Column data
-    uint16_t scroll_buffer_len;     // Length in columns
-    uint16_t scroll_position;       // Current scroll position
     uint32_t scroll_last_update;    // Last update time (ms)
     uint16_t scroll_speed;          // Speed (ms per column)
     uint8_t current_text_id;        // Current text ID for random selection

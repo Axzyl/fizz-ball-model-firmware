@@ -1,20 +1,21 @@
 """State machine for Schrödinger's Cat Alcohol Dispenser.
 
-States:
-- IDLE: Waiting for a person to approach
-- TRACKING: Following a detected face, arm waving
-- COLLAPSE: Quantum collapse animation (deciding outcome)
-- ALIVE: Cat is alive - dispense drink
-- DEAD: Cat is dead - 5-step dramatic sequence with partial pour
-- RESET: Returning to initial position
-- FAULT: Error state
+New simplified state model:
+- INACTIVE: Door closed (dark), all lights off, CV skipped to save CPU
+- COLLAPSE: Quantum collapse animation (deciding ALIVE/DEAD)
+- ALIVE: Cat is alive - persistent state with sub-behaviors
+- DEAD: Cat is dead - persistent static state
+- FAULT: Error state (ESP disconnect)
+
+State flow:
+INACTIVE -> (door opens) -> COLLAPSE -> ALIVE or DEAD -> (door closes) -> INACTIVE
 """
 
 from __future__ import annotations
 
 import random
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Optional
 
@@ -68,23 +69,28 @@ RGB_RAINBOW = 1       # Rainbow cycle (ignore r,g,b)
 
 
 class State(Enum):
-    """State machine states."""
-    IDLE = auto()
-    TRACKING = auto()
-    COLLAPSE = auto()
-    ALIVE = auto()
-    DEAD = auto()
-    RESET = auto()
-    FAULT = auto()
+    """State machine states - simplified model."""
+    INACTIVE = auto()   # Door closed, all off
+    COLLAPSE = auto()   # Quantum collapse (2s)
+    ALIVE = auto()      # Cat alive - persistent
+    DEAD = auto()       # Cat dead - persistent
+    FAULT = auto()      # ESP disconnect
 
 
-class DeadSubState(Enum):
-    """Sub-states for the DEAD state 5-step procedure."""
-    TENSION = 0       # Hold, solid red LEDs (~3s)
-    PARTIAL_POUR = 1  # Valve open for 35% of pour time
-    CHAOS = 2         # Violent shaking, red flicker (~2s)
-    DARKNESS = 3      # All LEDs off, brief pause (~1s)
-    FINAL_POUR = 4    # Valve open for remaining 65%
+class AliveBehavior(Enum):
+    """Sub-behaviors for ALIVE state."""
+    ENTRY = auto()              # Entry animation after collapse (~2s)
+    IDLE = auto()               # No detection - aqua dim, eyes closed
+    DETECTED = auto()           # Face detected - green, tracking, arm static
+    DISPENSING = auto()         # Valve open, aqua flash
+    DISPENSE_REJECT = auto()    # Already dispensed - shake, red flash
+
+
+class DeadBehavior(Enum):
+    """Sub-behaviors for DEAD state."""
+    ENTRY = auto()      # Entry animation after collapse (~2s) - red + X
+    NORMAL = auto()     # Static red + X
+    REJECT = auto()     # Limit switch pressed - flash red briefly
 
 
 @dataclass
@@ -92,83 +98,60 @@ class StateMachineConfig:
     """Configuration parameters for the state machine."""
 
     # Tracking parameters - defaults from config.py
-    tracking_velocity_gain: float = None  # How fast base rotates (from config.TRACKING_VELOCITY_GAIN)
-    tracking_deadzone: float = None  # Deadzone as fraction of frame (from config.TRACKING_DEADZONE)
-    tracking_max_velocity: float = None  # Max rotation speed degrees/tick (from config.TRACKING_MAX_VELOCITY)
+    tracking_velocity_gain: float = None  # How fast base rotates
+    tracking_deadzone: float = None       # Deadzone as fraction of frame
+    tracking_max_velocity: float = None   # Max rotation speed degrees/tick
     tracking_invert_direction: bool = False  # Invert tracking direction
-    tracking_base_min: float = 0.0  # Minimum base servo angle
+    tracking_base_min: float = 0.0   # Minimum base servo angle
     tracking_base_max: float = 180.0  # Maximum base servo angle
+
+    # State durations
+    collapse_duration: float = None       # Duration of collapse animation (2s)
+    alive_entry_duration: float = 2.0     # Entry animation duration
+    dead_entry_duration: float = 2.0      # Entry animation duration
+    dispense_duration: float = None       # How long valve stays open
+    dispense_flash_duration: float = None # How long to flash during dispense
+    reject_flash_duration: float = None   # How long to flash on reject
+
+    # Door detection thresholds
+    dark_to_inactive_duration: float = 2.0  # Seconds of darkness to enter INACTIVE
+    light_to_collapse_duration: float = 1.0  # Seconds of light to trigger COLLAPSE
+
+    # Arm wave parameters
+    arm_wave_min: float = 60.0
+    arm_wave_max: float = 120.0
+    arm_wave_speed: float = 2.0   # Degrees per tick
+    arm_wave_interval: float = None  # Seconds between waves when detected
+
+    # Shake parameters (for reject animation)
+    shake_speed: float = 15.0   # Degrees per tick
+    shake_range: float = 30.0   # Max deviation from center
+
+    # Alive/dead probability
+    alive_probability: float = 0.5  # 50% chance of alive
 
     def __post_init__(self):
         """Load defaults from config.py if not specified."""
         # Tracking settings
         if self.tracking_velocity_gain is None:
-            self.tracking_velocity_gain = getattr(config, 'TRACKING_VELOCITY_GAIN', 0.15)
+            self.tracking_velocity_gain = getattr(config, 'TRACKING_VELOCITY_GAIN', 0.1)
         if self.tracking_deadzone is None:
-            self.tracking_deadzone = getattr(config, 'TRACKING_DEADZONE', 0.05)
+            self.tracking_deadzone = getattr(config, 'TRACKING_DEADZONE', 0.067)
         if self.tracking_max_velocity is None:
-            self.tracking_max_velocity = getattr(config, 'TRACKING_MAX_VELOCITY', 5.0)
-        # Pour/dispensing settings
-        if self.alive_pour_duration is None:
-            self.alive_pour_duration = getattr(config, 'POUR_DURATION', 3.0)
-        if self.dead_partial_pour_ratio is None:
-            self.dead_partial_pour_ratio = getattr(config, 'POUR_PARTIAL_RATIO', 0.35)
-        if self.dead_final_pour_ratio is None:
-            self.dead_final_pour_ratio = getattr(config, 'POUR_FINAL_RATIO', 0.65)
+            self.tracking_max_velocity = getattr(config, 'TRACKING_MAX_VELOCITY', 4.0)
         # State durations
         if self.collapse_duration is None:
-            self.collapse_duration = getattr(config, 'COLLAPSE_DURATION', 3.0)
-        if self.reset_duration is None:
-            self.reset_duration = getattr(config, 'RESET_DURATION', 2.0)
-        if self.dead_tension_duration is None:
-            self.dead_tension_duration = getattr(config, 'DEAD_TENSION_DURATION', 3.0)
-        if self.dead_chaos_duration is None:
-            self.dead_chaos_duration = getattr(config, 'DEAD_CHAOS_DURATION', 2.0)
-        if self.dead_darkness_duration is None:
-            self.dead_darkness_duration = getattr(config, 'DEAD_DARKNESS_DURATION', 1.0)
-
-    # Idle behavior
-    idle_arm_position: float = 90.0  # Arm position when idle
-    idle_base_position: float = 90.0  # Base position when idle
-    idle_return_speed: float = 2.0  # Speed of return to center
-
-    # State durations (loaded from config.py in __post_init__)
-    collapse_duration: float = None  # Duration of collapse animation
-    alive_pour_duration: float = None  # How long to pour (alive outcome)
-    reset_duration: float = None  # How long reset takes
-
-    # DEAD state sub-step durations (loaded from config.py in __post_init__)
-    dead_tension_duration: float = None  # Step 1: tension buildup
-    dead_partial_pour_ratio: float = None  # Step 2: fraction of total pour
-    dead_chaos_duration: float = None  # Step 3: violent shaking
-    dead_darkness_duration: float = None  # Step 4: all LEDs off
-    dead_final_pour_ratio: float = None  # Step 5: remaining fraction
-
-    # Chaos shake parameters
-    chaos_shake_speed: float = 15.0  # Degrees per tick
-    chaos_shake_range: float = 30.0  # Max deviation from center
-
-    # Tracking to collapse trigger
-    tracking_min_time: float = 3.0  # Minimum time in tracking before collapse
-    tracking_limit_hold_time: float = 1.0  # How long limit must be held
-
-    # Arm wave parameters
-    arm_wave_min: float = 60.0
-    arm_wave_max: float = 120.0
-    arm_wave_speed: float = 2.0  # Degrees per tick
-    arm_wave_cooldown: float = 7.0  # 5-10s cooldown between waves
-
-    # Collapse arm position
-    collapse_arm_position: float = 45.0  # Forward-pointing pose
-
-    # Target switching threshold
-    target_switch_ratio: float = 1.5  # 150% size to switch target
-
-    # Alive/dead probability
-    alive_probability: float = 0.5  # 50% chance of alive
-
-    # Alive state base return
-    alive_base_return_speed: float = 1.0  # Slow return to 90
+            self.collapse_duration = getattr(config, 'COLLAPSE_DURATION', 2.0)
+        # Dispense settings
+        if self.dispense_duration is None:
+            self.dispense_duration = getattr(config, 'POUR_DURATION', 3.0)
+        if self.dispense_flash_duration is None:
+            self.dispense_flash_duration = getattr(config, 'DISPENSE_FLASH_DURATION', 2.0)
+        if self.reject_flash_duration is None:
+            self.reject_flash_duration = getattr(config, 'REJECT_FLASH_DURATION', 1.0)
+        # Arm wave interval
+        if self.arm_wave_interval is None:
+            self.arm_wave_interval = getattr(config, 'ARM_WAVE_INTERVAL', 5.0)
 
 
 class StateMachine:
@@ -178,9 +161,12 @@ class StateMachine:
         self.config = config or StateMachineConfig()
 
         # Current state
-        self._state = State.IDLE
+        self._state = State.INACTIVE
         self._state_start_time = time.time()
-        self._prev_state = State.IDLE
+        self._prev_state = State.INACTIVE
+
+        # Current behavior (for ALIVE/DEAD states)
+        self._current_behavior: Optional[Enum] = None
 
         # Tracking state
         self.tracking_base_position: float = 90.0
@@ -190,23 +176,17 @@ class StateMachine:
         self._arm_wave_direction: int = 1  # 1 = increasing, -1 = decreasing
         self._last_wave_time: float = 0.0
         self._wave_active: bool = False
-        self._was_centered: bool = False
-        self._last_face_count: int = 0
 
-        # Face target tracking
-        self._target_face_size: float = 0.0
-
-        # Limit switch tracking
-        self._limit_held_start: float = 0.0
-
-        # DEAD sub-state tracking
-        self._dead_sub_state: DeadSubState = DeadSubState.TENSION
-        self._dead_sub_entry_time: float = 0.0
+        # Shake state (for reject animation)
         self._shake_offset: float = 0.0
         self._shake_direction: int = 1
 
-        # Collapse position snapshot
-        self._collapse_base_position: float = 90.0
+        # Session tracking (reset when door closes)
+        self._has_dispensed: bool = False
+
+        # Timing for behaviors
+        self._dispense_start: float = 0.0
+        self._reject_start: float = 0.0
 
         # Outcome
         self._outcome: Optional[str] = None  # "ALIVE" or "DEAD"
@@ -219,23 +199,23 @@ class StateMachine:
         # Skip flags
         self._skip_requested: bool = False
 
+        # Dark/light tracking for door detection
+        self._dark_start_time: float = 0.0   # When darkness started
+        self._light_start_time: float = 0.0  # When light started
+
     def get_state_name(self) -> str:
         """Get current state name."""
         return self._state.name
 
-    def get_dead_sub_state_name(self) -> str:
-        """Get current DEAD sub-state name (if in DEAD state)."""
-        if self._state == State.DEAD:
-            return self._dead_sub_state.name
+    def get_behavior_name(self) -> str:
+        """Get current behavior name (for ALIVE/DEAD states)."""
+        if self._current_behavior is not None:
+            return self._current_behavior.name
         return ""
 
     def get_time_in_state(self) -> float:
         """Get time spent in current state."""
         return time.time() - self._state_start_time
-
-    def get_time_in_sub_state(self) -> float:
-        """Get time spent in current DEAD sub-state."""
-        return time.time() - self._dead_sub_entry_time
 
     def _transition_to(self, new_state: State) -> None:
         """Transition to a new state."""
@@ -243,17 +223,16 @@ class StateMachine:
         self._state = new_state
         self._state_start_time = time.time()
         self._skip_requested = False
+        self._current_behavior = None
 
         # State entry actions
-        if new_state == State.IDLE:
-            pass
-        elif new_state == State.TRACKING:
-            self._limit_held_start = 0.0
-            # Trigger wave on state entry
-            self._start_wave()
+        if new_state == State.INACTIVE:
+            # Reset session state when door closes
+            self._has_dispensed = False
+            self._light_start_time = 0.0
+            self._dispense_start = 0.0
+            self._reject_start = 0.0
         elif new_state == State.COLLAPSE:
-            # Snapshot current base position
-            self._collapse_base_position = self.tracking_base_position
             # Determine outcome
             if self.forced_outcome:
                 self._outcome = self.forced_outcome
@@ -261,32 +240,17 @@ class StateMachine:
             else:
                 self._outcome = "ALIVE" if random.random() < self.config.alive_probability else "DEAD"
         elif new_state == State.ALIVE:
-            pass
+            # Reset wave for entry animation
+            self._start_wave()
         elif new_state == State.DEAD:
-            # Initialize DEAD sub-state sequence
-            self._dead_sub_state = DeadSubState.TENSION
-            self._dead_sub_entry_time = time.time()
-            self._shake_offset = 0.0
-            self._shake_direction = 1
-        elif new_state == State.RESET:
-            self._outcome = None
-
-    def _advance_dead_substate(self) -> None:
-        """Advance to the next DEAD sub-state."""
-        current_idx = self._dead_sub_state.value
-        if current_idx < 4:
-            self._dead_sub_state = DeadSubState(current_idx + 1)
-            self._dead_sub_entry_time = time.time()
-            self._shake_offset = 0.0
+            pass
 
     def _start_wave(self) -> None:
-        """Start arm wave if cooldown elapsed."""
-        now = time.time()
-        if now - self._last_wave_time >= self.config.arm_wave_cooldown:
-            self._wave_active = True
-            self._last_wave_time = now
-            self.arm_wave_position = 90.0
-            self._arm_wave_direction = 1
+        """Start arm wave animation."""
+        self._wave_active = True
+        self._last_wave_time = time.time()
+        self.arm_wave_position = 90.0
+        self._arm_wave_direction = 1
 
     def _update_wave(self) -> float:
         """Update wave animation. Returns current arm position."""
@@ -307,18 +271,24 @@ class StateMachine:
         return self.arm_wave_position
 
     def _update_shake(self) -> float:
-        """Update shake animation for CHAOS sub-state. Returns offset."""
-        self._shake_offset += self._shake_direction * self.config.chaos_shake_speed
+        """Update shake animation. Returns offset to apply to servos."""
+        self._shake_offset += self._shake_direction * self.config.shake_speed
 
-        if abs(self._shake_offset) >= self.config.chaos_shake_range:
+        if abs(self._shake_offset) >= self.config.shake_range:
             self._shake_direction = -self._shake_direction
 
         return self._shake_offset
 
-    def _get_flicker_state(self) -> bool:
-        """Get flicker on/off state for red flicker effect."""
-        # Fast random flicker
-        return random.random() > 0.3
+    def _should_transition_to_inactive(self, face: FaceState) -> bool:
+        """Check if dark long enough to return to INACTIVE."""
+        if face.is_dark:
+            if self._dark_start_time == 0:
+                self._dark_start_time = time.time()
+            elif (time.time() - self._dark_start_time) >= self.config.dark_to_inactive_duration:
+                return True
+        else:
+            self._dark_start_time = 0
+        return False
 
     def tick(self, face: FaceState, esp: EspState) -> dict:
         """
@@ -336,146 +306,77 @@ class StateMachine:
             self._fault_reason = "ESP connection lost"
             self._transition_to(State.FAULT)
 
+        # Check for camera disconnect - return to INACTIVE from any non-INACTIVE state
+        if not face.camera_connected and self._state not in (State.INACTIVE, State.FAULT):
+            self._fault_reason = "Camera disconnected"
+            self._transition_to(State.INACTIVE)
+            return self._tick_inactive(face, esp)
+
+        # Track light duration for INACTIVE -> COLLAPSE transition
+        if not face.is_dark:
+            if self._light_start_time == 0:
+                self._light_start_time = time.time()
+        else:
+            self._light_start_time = 0
+
         # Run state-specific logic
-        if self._state == State.IDLE:
-            return self._tick_idle(face, esp)
-        elif self._state == State.TRACKING:
-            return self._tick_tracking(face, esp)
+        if self._state == State.INACTIVE:
+            return self._tick_inactive(face, esp)
         elif self._state == State.COLLAPSE:
             return self._tick_collapse(face, esp)
         elif self._state == State.ALIVE:
             return self._tick_alive(face, esp)
         elif self._state == State.DEAD:
             return self._tick_dead(face, esp)
-        elif self._state == State.RESET:
-            return self._tick_reset(face, esp)
         elif self._state == State.FAULT:
             return self._tick_fault(face, esp)
 
         return self._make_commands()
 
-    def _tick_idle(self, face: FaceState, esp: EspState) -> dict:
-        """IDLE state: waiting for someone to approach.
+    def _tick_inactive(self, face: FaceState, esp: EspState) -> dict:
+        """INACTIVE state: door closed, all lights off, CV skipped.
 
-        Spec:
-        - Base servo: Move to 90°
-        - Arm servo: Move to 90°
-        - Valve: Force closed
-        - LED ring: Very dim idle glow, purple with slow blue pulses
-        - 5×5 matrix: Closed eye icon (static), purple
-        - RGB strip: Dim ambient, purple with slow blue pulses
+        - Entry: Reset _has_dispensed flag
+        - Exit: 1 second of light -> COLLAPSE (only if camera connected)
+        - Outputs: All off, servos at 90
         """
+        self._current_behavior = None
 
-        # Check for face detection to start tracking
-        if face.detected and face.is_facing:
-            self._transition_to(State.TRACKING)
-            return self._tick_tracking(face, esp)
+        # Only transition if camera is connected
+        if not face.camera_connected:
+            # Reset light timer when camera disconnected - stay in INACTIVE
+            self._light_start_time = 0
+        elif not face.is_dark and self._light_start_time > 0:
+            # Check if light has been detected long enough to trigger collapse
+            light_duration = time.time() - self._light_start_time
+            if light_duration >= self.config.light_to_collapse_duration:
+                self._transition_to(State.COLLAPSE)
+                return self._tick_collapse(face, esp)
 
-        # Move base toward 90°
-        diff = self.config.idle_base_position - self.tracking_base_position
-        if abs(diff) > 0.5:
-            move = min(self.config.idle_return_speed, abs(diff))
-            self.tracking_base_position += move if diff > 0 else -move
-
-        # IDLE lighting: dim purple, closed eye icon
+        # Everything off
         return self._make_commands(
-            servo_target_2=self.config.idle_arm_position,
-            servo_target_1=self.tracking_base_position,
+            servo_target_1=90.0,
+            servo_target_2=90.0,
             valve_open=False,
-            # RGB strip: dim purple
             rgb_mode=RGB_SOLID,
-            rgb_r=40, rgb_g=0, rgb_b=60,
-            # 5x5 matrix: closed eye icon, purple
-            npm_mode=NPM_EYE_CLOSED,
-            npm_r=100, npm_g=0, npm_b=150,
-            # LED ring: breathing purple
-            npr_mode=NPR_BREATHE,
-            npr_r=80, npr_g=0, npr_b=120,
-        )
-
-    def _tick_tracking(self, face: FaceState, esp: EspState) -> dict:
-        """TRACKING state: following a face, arm waving.
-
-        Spec:
-        - Base servo: Rotate to center tracked target
-        - Arm servo: Wave on entry, when centered, new person; 5-10s cooldown
-        - Valve: Closed
-        - LED ring: Bright blue/purple gradient
-        - 5×5 matrix: Open eye icon (static)
-        - RGB strip: Bright blue/purple gradient
-        """
-
-        # Check if face lost
-        if not face.detected:
-            self._transition_to(State.IDLE)
-            return self._tick_idle(face, esp)
-
-        # Check if face is centered in frame (for wave trigger)
-        # Use bbox position, not yaw
-        is_centered = False
-        frame_width = getattr(config, 'CAMERA_WIDTH', 640)
-        if face.bbox is not None:
-            x, y, w, h = face.bbox
-            face_center_x = (x + w / 2) / frame_width  # Normalize to 0-1
-            is_centered = abs(face_center_x - 0.5) < 0.1  # Within 10% of center
-
-        # Trigger wave when becoming centered
-        if is_centered and not self._was_centered:
-            self._start_wave()
-        self._was_centered = is_centered
-
-        # Update base position based on face POSITION in frame (not yaw)
-        # This matches how vision_servo_test.py works
-        velocity = self._calculate_tracking_velocity_from_position(face)
-        self.tracking_base_position += velocity
-        self.tracking_base_position = max(
-            self.config.tracking_base_min,
-            min(self.config.tracking_base_max, self.tracking_base_position)
-        )
-
-        # Update arm wave animation
-        arm_position = self._update_wave()
-        if not self._wave_active:
-            arm_position = 90.0  # Idle position when not waving
-
-        # Check limit switch for collapse trigger
-        if esp.limit_triggered:
-            if self._limit_held_start == 0:
-                self._limit_held_start = time.time()
-            elif (time.time() - self._limit_held_start) >= self.config.tracking_limit_hold_time:
-                if self.get_time_in_state() >= self.config.tracking_min_time:
-                    self._transition_to(State.COLLAPSE)
-                    return self._tick_collapse(face, esp)
-        else:
-            self._limit_held_start = 0
-
-        # TRACKING lighting: bright blue/purple, open eye icon
-        return self._make_commands(
-            servo_target_2=arm_position,
-            servo_target_1=self.tracking_base_position,
-            valve_open=False,
-            # RGB strip: bright blue/purple
-            rgb_mode=RGB_SOLID,
-            rgb_r=80, rgb_g=0, rgb_b=200,
-            # 5x5 matrix: open eye icon, bright
-            npm_mode=NPM_EYE_OPEN,
-            npm_r=150, npm_g=50, npm_b=255,
-            # LED ring: solid blue/purple
-            npr_mode=NPR_SOLID,
-            npr_r=100, npr_g=20, npr_b=200,
+            rgb_r=0, rgb_g=0, rgb_b=0,
+            npm_mode=NPM_OFF,
+            npm_r=0, npm_g=0, npm_b=0,
+            npr_mode=NPR_OFF,
+            npr_r=0, npr_g=0, npr_b=0,
+            matrix_left=0,
+            matrix_right=0,
         )
 
     def _tick_collapse(self, face: FaceState, esp: EspState) -> dict:
-        """COLLAPSE state: quantum collapse animation.
+        """COLLAPSE state: quantum collapse animation (2 seconds).
 
-        Spec:
-        - Base servo: Hold current position
-        - Arm servo: Move to 45° (forward-pointing)
-        - Valve: Closed
-        - LED ring: Fast, bright rainbow animation
-        - 5×5 matrix: Optional neutral or glitch pattern (no symbols)
-        - RGB strip: Fast, bright rainbow animation
+        - On entry: Determine outcome (ALIVE/DEAD)
+        - Duration: 2 seconds
+        - Exit: -> ALIVE or DEAD based on outcome
+        - Outputs: Rainbow on all LEDs, servos at 90
         """
+        self._current_behavior = None
 
         # Check for timeout or skip
         if self.get_time_in_state() >= self.config.collapse_duration or self._skip_requested:
@@ -488,247 +389,321 @@ class StateMachine:
 
         # COLLAPSE lighting: fast rainbow everywhere
         return self._make_commands(
-            servo_target_2=self.config.collapse_arm_position,
-            servo_target_1=self._collapse_base_position,
+            servo_target_1=90.0,
+            servo_target_2=90.0,
             valve_open=False,
-            # RGB strip: rainbow animation
             rgb_mode=RGB_RAINBOW,
             rgb_r=255, rgb_g=255, rgb_b=255,
-            # 5x5 matrix: rainbow animation (glitch effect)
             npm_mode=NPM_RAINBOW,
             npm_r=255, npm_g=255, npm_b=255,
-            # LED ring: rainbow animation
             npr_mode=NPR_RAINBOW,
             npr_r=255, npr_g=255, npr_b=255,
         )
 
     def _tick_alive(self, face: FaceState, esp: EspState) -> dict:
-        """ALIVE state: cat is alive, dispense drink.
+        """ALIVE state: persistent state with sub-behaviors.
 
-        Spec:
-        - Base servo: Slowly rotate back to 90°
-        - Arm servo: Friendly motion or idle
-        - Valve: Open for 100% pour duration
-        - LED ring: Solid green or gentle pulse
-        - 5×5 matrix: Green circle icon
-        - RGB strip: Solid green
+        Sub-behaviors:
+        - ENTRY: Wave + green (~2s)
+        - IDLE: No detection - aqua dim, eyes closed
+        - DETECTED_NOT_FACING: Green, tracking, arm static
+        - LOOKING_DIRECTLY: Yellow, tracking, arm waves periodically
+        - DISPENSING: Valve open, aqua flash
+        - DISPENSE_REJECT: Already dispensed - shake, red flash
+
+        Exit: 2s of dark -> INACTIVE
         """
+        # Check for door close -> INACTIVE
+        if self._should_transition_to_inactive(face):
+            self._transition_to(State.INACTIVE)
+            return self._tick_inactive(face, esp)
 
-        # Check for timeout or skip
-        if self.get_time_in_state() >= self.config.alive_pour_duration or self._skip_requested:
-            self._transition_to(State.RESET)
-            return self._tick_reset(face, esp)
+        # Determine current behavior
+        behavior = self._determine_alive_behavior(face, esp)
+        self._current_behavior = behavior
 
-        # Slowly return base to 90°
-        diff = 90.0 - self.tracking_base_position
-        if abs(diff) > 0.5:
-            move = min(self.config.alive_base_return_speed, abs(diff))
-            self.tracking_base_position += move if diff > 0 else -move
+        # Execute behavior-specific logic
+        if behavior == AliveBehavior.ENTRY:
+            return self._alive_entry(face, esp)
+        elif behavior == AliveBehavior.DISPENSING:
+            return self._alive_dispensing(face, esp)
+        elif behavior == AliveBehavior.DISPENSE_REJECT:
+            return self._alive_dispense_reject(face, esp)
+        elif behavior == AliveBehavior.DETECTED:
+            return self._alive_detected(face, esp)
+        else:  # IDLE
+            return self._alive_idle(face, esp)
 
-        # Dispense if enabled
-        should_dispense = self.dispensing_enabled
+    def _determine_alive_behavior(self, face: FaceState, esp: EspState) -> AliveBehavior:
+        """Determine which ALIVE sub-behavior to execute."""
+        # Entry animation takes priority (first 2 seconds)
+        if self.get_time_in_state() < self.config.alive_entry_duration:
+            return AliveBehavior.ENTRY
 
-        # ALIVE lighting: solid green, circle icon
+        # Check if currently in dispense or reject animation
+        if self._dispense_start > 0:
+            dispense_elapsed = time.time() - self._dispense_start
+            if dispense_elapsed < self.config.dispense_flash_duration:
+                return AliveBehavior.DISPENSING
+
+        if self._reject_start > 0:
+            reject_elapsed = time.time() - self._reject_start
+            if reject_elapsed < self.config.reject_flash_duration:
+                return AliveBehavior.DISPENSE_REJECT
+
+        # Limit switch pressed - check for dispense or reject
+        if esp.limit_triggered:
+            if not self._has_dispensed:
+                # Start dispense - mark as dispensed IMMEDIATELY to prevent double-dispense
+                self._has_dispensed = True
+                self._dispense_start = time.time()
+                return AliveBehavior.DISPENSING
+            else:
+                # Already dispensed - reject
+                self._reject_start = time.time()
+                self._shake_offset = 0.0
+                self._shake_direction = 1
+                return AliveBehavior.DISPENSE_REJECT
+
+        # Face detection behavior
+        if face.detected:
+            return AliveBehavior.DETECTED
+
+        return AliveBehavior.IDLE
+
+    def _alive_entry(self, face: FaceState, esp: EspState) -> dict:
+        """ALIVE entry: Wave + solid green, eyes open."""
+        # Arm wave animation
+        arm_pos = self._update_wave()
+
         return self._make_commands(
-            servo_target_2=100.0,
-            servo_target_1=self.tracking_base_position,
-            valve_open=should_dispense,
-            # RGB strip: solid green
+            servo_target_1=90.0,
+            servo_target_2=arm_pos,
+            valve_open=False,
+            npm_mode=NPM_EYE_OPEN,
+            npm_r=0, npm_g=255, npm_b=0,
+            npr_mode=NPR_SOLID,
+            npr_r=0, npr_g=255, npr_b=0,
             rgb_mode=RGB_SOLID,
             rgb_r=0, rgb_g=200, rgb_b=0,
-            # 5x5 matrix: green circle icon
-            npm_mode=NPM_CIRCLE,
-            npm_r=0, npm_g=255, npm_b=0,
-            # LED ring: breathing green
-            npr_mode=NPR_BREATHE,
-            npr_r=0, npr_g=200, npr_b=0,
         )
 
-    def _tick_dead(self, face: FaceState, esp: EspState) -> dict:
-        """DEAD state: 5-step dramatic sequence.
-
-        Spec:
-        Step 1 - Tension (~3s): Hold, solid red LEDs, 5x5 red X
-        Step 2 - Partial Pour: Valve open for 35%, lights red, 5x5 red X
-        Step 3 - Chaos (~2s): Violent shaking, red flicker, 5x5 red X flicker
-        Step 4 - Darkness (~1s): All LEDs off
-        Step 5 - Final Pour: Valve open for remaining 65%, LEDs off/minimal
-        """
-
-        time_in_sub = self.get_time_in_sub_state()
-
-        # Calculate pour times
-        total_pour_time = self.config.alive_pour_duration
-        partial_pour_time = total_pour_time * self.config.dead_partial_pour_ratio
-        final_pour_time = total_pour_time * self.config.dead_final_pour_ratio
-
-        # Process current sub-state
-        if self._dead_sub_state == DeadSubState.TENSION:
-            # Step 1: Tension - hold position, solid red (~3s)
-            if time_in_sub >= self.config.dead_tension_duration:
-                self._advance_dead_substate()
-
-            return self._make_commands(
-                servo_target_2=90.0,
-                servo_target_1=self._collapse_base_position,
-                valve_open=False,
-                # RGB strip: solid red
-                rgb_mode=RGB_SOLID,
-                rgb_r=200, rgb_g=0, rgb_b=0,
-                # 5x5 matrix: red X icon
-                npm_mode=NPM_X,
-                npm_r=255, npm_g=0, npm_b=0,
-                # LED ring: solid red
-                npr_mode=NPR_SOLID,
-                npr_r=200, npr_g=0, npr_b=0,
-            )
-
-        elif self._dead_sub_state == DeadSubState.PARTIAL_POUR:
-            # Step 2: Partial pour - valve open 35%, lights remain red
-            if time_in_sub >= partial_pour_time:
-                self._advance_dead_substate()
-
-            should_dispense = self.dispensing_enabled
-
-            return self._make_commands(
-                servo_target_2=90.0,
-                servo_target_1=self._collapse_base_position,
-                valve_open=should_dispense,
-                # RGB strip: solid red
-                rgb_mode=RGB_SOLID,
-                rgb_r=200, rgb_g=0, rgb_b=0,
-                # 5x5 matrix: red X icon
-                npm_mode=NPM_X,
-                npm_r=255, npm_g=0, npm_b=0,
-                # LED ring: solid red
-                npr_mode=NPR_SOLID,
-                npr_r=200, npr_g=0, npr_b=0,
-            )
-
-        elif self._dead_sub_state == DeadSubState.CHAOS:
-            # Step 3: Chaos - violent shaking, red flicker (~2s)
-            if time_in_sub >= self.config.dead_chaos_duration:
-                self._advance_dead_substate()
-
-            shake = self._update_shake()
-            flicker_on = self._get_flicker_state()
-            flicker_brightness = 255 if flicker_on else 30
-
-            return self._make_commands(
-                servo_target_2=90.0 + shake,
-                servo_target_1=self._collapse_base_position + shake * 0.5,
-                valve_open=False,
-                # RGB strip: flickering red
-                rgb_mode=RGB_SOLID,
-                rgb_r=flicker_brightness, rgb_g=0, rgb_b=0,
-                # 5x5 matrix: flickering red X
-                npm_mode=NPM_X,
-                npm_r=flicker_brightness, npm_g=0, npm_b=0,
-                # LED ring: flickering red
-                npr_mode=NPR_SOLID,
-                npr_r=flicker_brightness, npr_g=0, npr_b=0,
-            )
-
-        elif self._dead_sub_state == DeadSubState.DARKNESS:
-            # Step 4: Darkness - ALL lights off (~1s)
-            if time_in_sub >= self.config.dead_darkness_duration:
-                self._advance_dead_substate()
-
-            return self._make_commands(
-                servo_target_2=90.0,
-                servo_target_1=self._collapse_base_position,
-                valve_open=False,
-                # All off
-                rgb_mode=RGB_SOLID,
-                rgb_r=0, rgb_g=0, rgb_b=0,
-                npm_mode=NPM_OFF,
-                npm_r=0, npm_g=0, npm_b=0,
-                npr_mode=NPR_OFF,
-                npr_r=0, npr_g=0, npr_b=0,
-            )
-
-        elif self._dead_sub_state == DeadSubState.FINAL_POUR:
-            # Step 5: Final pour - valve open 65%, LEDs minimal
-            if time_in_sub >= final_pour_time or self._skip_requested:
-                self._transition_to(State.RESET)
-                return self._tick_reset(face, esp)
-
-            should_dispense = self.dispensing_enabled
-
-            return self._make_commands(
-                servo_target_2=90.0,
-                servo_target_1=self._collapse_base_position,
-                valve_open=should_dispense,
-                # All off or minimal
-                rgb_mode=RGB_SOLID,
-                rgb_r=0, rgb_g=0, rgb_b=0,
-                npm_mode=NPM_X,
-                npm_r=30, npm_g=0, npm_b=0,  # Very dim red X
-                npr_mode=NPR_OFF,
-                npr_r=0, npr_g=0, npr_b=0,
-            )
-
-        # Fallback
-        return self._make_commands()
-
-    def _tick_reset(self, face: FaceState, esp: EspState) -> dict:
-        """RESET state: returning to initial position.
-
-        Spec:
-        - Base servo: Move to 90°
-        - Arm servo: Move to 90°
-        - Valve: Force closed
-        - LED ring: Off
-        - 5×5 matrix: Off
-        - RGB strip: Off
-        """
-
-        # Check for timeout
-        if self.get_time_in_state() >= self.config.reset_duration:
-            self._transition_to(State.IDLE)
-            return self._tick_idle(face, esp)
-
-        # Move back to center
+    def _alive_idle(self, face: FaceState, esp: EspState) -> dict:
+        """ALIVE idle: No detection - aqua dim, eyes closed."""
+        # Move base back to 90
         diff = 90.0 - self.tracking_base_position
-        if abs(diff) > 1.0:
+        if abs(diff) > 0.5:
             move = min(2.0, abs(diff))
             self.tracking_base_position += move if diff > 0 else -move
 
-        # Spec: All LEDs off
         return self._make_commands(
-            servo_target_2=90.0,
             servo_target_1=self.tracking_base_position,
+            servo_target_2=90.0,
             valve_open=False,
+            npm_mode=NPM_EYE_CLOSED,
+            npm_r=0, npm_g=180, npm_b=180,  # Aqua
+            npr_mode=NPR_BREATHE,
+            npr_r=0, npr_g=150, npr_b=150,
             rgb_mode=RGB_SOLID,
-            rgb_r=0, rgb_g=0, rgb_b=0,  # Off
-            npm_mode=NPM_OFF,  # Off
-            npr_mode=NPR_OFF,  # Off
-            matrix_left=0,  # Off
-            matrix_right=0,  # Off
+            rgb_r=0, rgb_g=80, rgb_b=80,  # Dim aqua
+        )
+
+    def _alive_detected(self, face: FaceState, esp: EspState) -> dict:
+        """ALIVE detected: Green, tracking, periodic arm wave."""
+        # Update tracking position
+        velocity = self._calculate_tracking_velocity_from_position(face)
+        self.tracking_base_position += velocity
+        self.tracking_base_position = max(
+            self.config.tracking_base_min,
+            min(self.config.tracking_base_max, self.tracking_base_position)
+        )
+
+        # Periodic arm wave - triggers every arm_wave_interval seconds
+        # Also triggers immediately when first entering DETECTED after entry animation
+        arm_pos = 90.0
+        now = time.time()
+        time_since_last_wave = now - self._last_wave_time
+        just_finished_entry = self.get_time_in_state() < (self.config.alive_entry_duration + 0.5)
+
+        if not self._wave_active:
+            # Start wave if interval elapsed OR if we just finished entry animation
+            if time_since_last_wave >= self.config.arm_wave_interval or (just_finished_entry and time_since_last_wave > 1.0):
+                self._start_wave()
+
+        if self._wave_active:
+            arm_pos = self._update_wave()
+
+        return self._make_commands(
+            servo_target_1=self.tracking_base_position,
+            servo_target_2=arm_pos,
+            valve_open=False,
+            npm_mode=NPM_EYE_OPEN,
+            npm_r=0, npm_g=255, npm_b=0,  # Green
+            npr_mode=NPR_SOLID,
+            npr_r=0, npr_g=255, npr_b=0,
+            rgb_mode=RGB_SOLID,
+            rgb_r=0, rgb_g=200, rgb_b=0,
+        )
+
+    def _alive_dispensing(self, face: FaceState, esp: EspState) -> dict:
+        """ALIVE dispensing: Valve open, aqua flash with open eyes."""
+        dispense_elapsed = time.time() - self._dispense_start
+
+        # Check if dispense animation complete
+        if dispense_elapsed >= self.config.dispense_flash_duration:
+            # _has_dispensed was already set at start of dispense
+            self._dispense_start = 0
+
+        # Valve open only for the actual pour duration
+        valve_open = self.dispensing_enabled and (dispense_elapsed < self.config.dispense_duration)
+
+        # Fast flashing aqua/cyan (8Hz for obvious blink, full on/off)
+        flash = int(time.time() * 8) % 2 == 0
+        brightness = 255 if flash else 0
+
+        return self._make_commands(
+            servo_target_1=self.tracking_base_position,
+            servo_target_2=90.0,
+            valve_open=valve_open,
+            npm_mode=NPM_EYE_OPEN,  # Open eyes = dispensing (not X)
+            npm_r=0, npm_g=brightness, npm_b=brightness,  # Aqua flash
+            npr_mode=NPR_SOLID,
+            npr_r=0, npr_g=brightness, npr_b=brightness,
+            rgb_mode=RGB_SOLID,
+            rgb_r=0, rgb_g=brightness, rgb_b=brightness,
+        )
+
+    def _alive_dispense_reject(self, face: FaceState, esp: EspState) -> dict:
+        """ALIVE already dispensed: Shake, red flash, X eyes."""
+        reject_elapsed = time.time() - self._reject_start
+
+        # Check if reject animation complete
+        if reject_elapsed >= self.config.reject_flash_duration:
+            self._reject_start = 0
+            self._shake_offset = 0
+
+        # Shake animation
+        shake = self._update_shake()
+
+        # Fast flashing red (8Hz for obvious blink, full on/off)
+        flash = int(time.time() * 8) % 2 == 0
+        brightness = 255 if flash else 0
+
+        return self._make_commands(
+            servo_target_1=90.0 + shake * 0.5,
+            servo_target_2=90.0 + shake,
+            valve_open=False,
+            npm_mode=NPM_X,  # X to indicate rejection
+            npm_r=brightness, npm_g=0, npm_b=0,
+            npr_mode=NPR_SOLID,
+            npr_r=brightness, npr_g=0, npr_b=0,
+            rgb_mode=RGB_SOLID,
+            rgb_r=brightness, rgb_g=0, rgb_b=0,
+        )
+
+    def _tick_dead(self, face: FaceState, esp: EspState) -> dict:
+        """DEAD state: simple static state - no tracking, no dispensing.
+
+        Sub-behaviors:
+        - ENTRY: Solid red + X eyes (~2s)
+        - NORMAL: Static red + X (same as entry)
+        - REJECT: Limit switch pressed - flash red briefly
+
+        Exit: 2s of dark -> INACTIVE
+        """
+        # Check for door close -> INACTIVE
+        if self._should_transition_to_inactive(face):
+            self._transition_to(State.INACTIVE)
+            return self._tick_inactive(face, esp)
+
+        # Determine behavior
+        behavior = self._determine_dead_behavior(face, esp)
+        self._current_behavior = behavior
+
+        if behavior == DeadBehavior.REJECT:
+            return self._dead_reject(face, esp)
+        else:  # ENTRY or NORMAL (same visuals)
+            return self._dead_normal(face, esp)
+
+    def _determine_dead_behavior(self, face: FaceState, esp: EspState) -> DeadBehavior:
+        """Determine DEAD sub-behavior."""
+        # Entry animation (first 2 seconds)
+        if self.get_time_in_state() < self.config.dead_entry_duration:
+            return DeadBehavior.ENTRY
+
+        # Check if currently in reject animation
+        if self._reject_start > 0:
+            reject_elapsed = time.time() - self._reject_start
+            if reject_elapsed < self.config.reject_flash_duration:
+                return DeadBehavior.REJECT
+
+        # Limit switch pressed - trigger reject
+        if esp.limit_triggered:
+            self._reject_start = time.time()
+            return DeadBehavior.REJECT
+
+        return DeadBehavior.NORMAL
+
+    def _dead_normal(self, face: FaceState, esp: EspState) -> dict:
+        """DEAD normal: Static red + X, no tracking."""
+        return self._make_commands(
+            servo_target_1=90.0,  # No tracking
+            servo_target_2=90.0,
+            valve_open=False,  # Never dispense
+            npm_mode=NPM_X,
+            npm_r=255, npm_g=0, npm_b=0,
+            npr_mode=NPR_SOLID,
+            npr_r=255, npr_g=0, npr_b=0,
+            rgb_mode=RGB_SOLID,
+            rgb_r=200, rgb_g=0, rgb_b=0,
+        )
+
+    def _dead_reject(self, face: FaceState, esp: EspState) -> dict:
+        """DEAD reject: Flash red on limit switch."""
+        reject_elapsed = time.time() - self._reject_start
+
+        if reject_elapsed >= self.config.reject_flash_duration:
+            self._reject_start = 0
+
+        # Fast flashing red (8Hz for obvious blink, full on/off)
+        flash = int(time.time() * 8) % 2 == 0
+        brightness = 255 if flash else 0
+
+        return self._make_commands(
+            servo_target_1=90.0,
+            servo_target_2=90.0,
+            valve_open=False,
+            npm_mode=NPM_X,
+            npm_r=brightness, npm_g=0, npm_b=0,
+            npr_mode=NPR_SOLID,
+            npr_r=brightness, npr_g=0, npr_b=0,
+            rgb_mode=RGB_SOLID,
+            rgb_r=brightness, rgb_g=0, rgb_b=0,
         )
 
     def _tick_fault(self, face: FaceState, esp: EspState) -> dict:
-        """FAULT state: error occurred."""
+        """FAULT state: error occurred (ESP disconnect)."""
+        self._current_behavior = None
 
         # Check if connection restored
         if esp.connected and self.dispensing_enabled:
-            self._transition_to(State.RESET)
-            return self._tick_reset(face, esp)
+            self._transition_to(State.INACTIVE)
+            return self._tick_inactive(face, esp)
 
-        # Flash red to indicate fault
-        flash = int(time.time() * 2) % 2 == 0
-        flash_brightness = 255 if flash else 0
+        # Fast flash red to indicate fault (8Hz, full on/off)
+        flash = int(time.time() * 8) % 2 == 0
+        brightness = 255 if flash else 0
 
         return self._make_commands(
-            servo_target_2=90.0,
             servo_target_1=90.0,
+            servo_target_2=90.0,
             valve_open=False,
             rgb_mode=RGB_SOLID,
-            rgb_r=flash_brightness, rgb_g=0, rgb_b=0,
-            npm_mode=NPM_X,  # X icon flashing
-            npm_r=flash_brightness, npm_g=0, npm_b=0,
+            rgb_r=brightness, rgb_g=0, rgb_b=0,
+            npm_mode=NPM_X,
+            npm_r=brightness, npm_g=0, npm_b=0,
             npr_mode=NPR_SOLID,
-            npr_r=flash_brightness, npr_g=0, npr_b=0,
+            npr_r=brightness, npr_g=0, npr_b=0,
             matrix_left=2,  # X
             matrix_right=2,  # X
         )
@@ -737,8 +712,7 @@ class StateMachine:
         """
         Calculate base rotation velocity from face position in frame.
 
-        This uses the face's POSITION in the frame (bbox), not the head's yaw angle.
-        This matches how vision_servo_test.py works EXACTLY.
+        Uses the face's POSITION in the frame (bbox), not the head's yaw angle.
 
         Args:
             face: Face state with bbox
@@ -751,40 +725,23 @@ class StateMachine:
 
         x, y, w, h = face.bbox
 
-        # Use ACTUAL frame dimensions from face state (same as vision_servo_test.py)
+        # Use ACTUAL frame dimensions from face state
         frame_width = face.frame_width if face.frame_width > 0 else 640
 
         # Calculate face center as fraction of frame (0.0 = left, 1.0 = right)
-        # Same calculation as vision_servo_test.py
         face_center_x = (x + w / 2) / frame_width
 
         # Calculate error from center (positive = face is right of center)
         error = face_center_x - 0.5
 
-        # Apply deadzone (as fraction of frame, e.g., 0.05 = 5%)
+        # Apply deadzone (as fraction of frame)
         if abs(error) < self.config.tracking_deadzone:
             return 0.0
 
-        # Calculate velocity - same formula as vision_servo_test.py
+        # Calculate velocity
         velocity = -error * 180.0 * self.config.tracking_velocity_gain
 
         # Clamp velocity to prevent overshoot
-        velocity = max(-self.config.tracking_max_velocity,
-                      min(self.config.tracking_max_velocity, velocity))
-
-        if self.config.tracking_invert_direction:
-            velocity = -velocity
-
-        return velocity
-
-    def _calculate_tracking_velocity(self, yaw: float) -> float:
-        """Calculate base rotation velocity from face yaw (DEPRECATED - use position-based)."""
-        if abs(yaw) < self.config.tracking_deadzone:
-            return 0.0
-
-        sign = 1.0 if yaw > 0 else -1.0
-        effective_yaw = abs(yaw) - self.config.tracking_deadzone
-        velocity = effective_yaw * self.config.tracking_velocity_gain * sign
         velocity = max(-self.config.tracking_max_velocity,
                       min(self.config.tracking_max_velocity, velocity))
 
@@ -802,16 +759,16 @@ class StateMachine:
         rgb_r: int = 0,
         rgb_g: int = 0,
         rgb_b: int = 0,
-        npm_mode: int = NPM_OFF,  # Matrix off by default
+        npm_mode: int = NPM_OFF,
         npm_letter: str = "A",
         npm_r: int = 0,
         npm_g: int = 0,
         npm_b: int = 0,
-        npr_mode: int = NPR_OFF,  # Ring off by default
+        npr_mode: int = NPR_OFF,
         npr_r: int = 0,
         npr_g: int = 0,
         npr_b: int = 0,
-        matrix_left: int = 0,  # MAX7219 off by default
+        matrix_left: int = 0,
         matrix_right: int = 0,
     ) -> dict:
         """Create command dictionary."""
@@ -839,28 +796,27 @@ class StateMachine:
     # --- Operator controls ---
 
     def force_collapse(self) -> None:
-        """Force transition to COLLAPSE state (only from TRACKING)."""
-        if self._state == State.TRACKING:
+        """Force transition to COLLAPSE state (from any state except FAULT)."""
+        if self._state != State.FAULT:
             self._transition_to(State.COLLAPSE)
 
-    def force_reset(self) -> None:
-        """Force transition to RESET state."""
-        self._transition_to(State.RESET)
+    def force_inactive(self) -> None:
+        """Force transition to INACTIVE state."""
+        self._transition_to(State.INACTIVE)
 
     def skip_animation(self) -> None:
-        """Skip current animation."""
+        """Skip current animation (COLLAPSE only)."""
         self._skip_requested = True
 
     def emergency_stop(self) -> None:
         """Emergency stop - disable dispensing."""
         self.dispensing_enabled = False
-        # Force valve close is handled by setting valve_open=False
 
     def enable_dispensing(self) -> None:
         """Re-enable dispensing after emergency stop."""
         self.dispensing_enabled = True
         if self._state == State.FAULT:
-            self._transition_to(State.RESET)
+            self._transition_to(State.INACTIVE)
 
     def set_forced_outcome(self, outcome: Optional[str]) -> None:
         """Set forced outcome for next collapse (ALIVE, DEAD, or None for random)."""

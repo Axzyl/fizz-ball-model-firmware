@@ -22,6 +22,7 @@
 #define NPR_MODE_CHASE      3       // Single LED chase animation
 #define NPR_MODE_BREATHE    4       // Breathing/pulse effect
 #define NPR_MODE_SPINNER    5       // Spinning dot animation
+#define NPR_MODE_GRADIENT   6       // Ping-pong gradient between 2 colors
 
 // Animation speeds
 #define NPR_RAINBOW_SPEED   3       // Rainbow cycling speed
@@ -40,6 +41,10 @@ typedef struct {
     int8_t breathe_direction;       // 1 = increasing, -1 = decreasing
     uint32_t last_update;           // For timing
     bool needs_update;
+    // Gradient mode fields
+    uint8_t r2, g2, b2;             // Second color for gradient
+    uint8_t gradient_speed;         // Animation speed (1-50)
+    uint16_t gradient_position;     // Current position (0-510 for ping-pong)
 } NprState;
 
 /**
@@ -64,8 +69,13 @@ void npr_state_init(NprState* state);
  * @param r Red value (0-255)
  * @param g Green value (0-255)
  * @param b Blue value (0-255)
+ * @param r2 Gradient second color red (0-255)
+ * @param g2 Gradient second color green (0-255)
+ * @param b2 Gradient second color blue (0-255)
+ * @param speed Gradient animation speed (1-50)
  */
-void npr_set_mode(NprState* state, uint8_t mode, uint8_t r, uint8_t g, uint8_t b);
+void npr_set_mode(NprState* state, uint8_t mode, uint8_t r, uint8_t g, uint8_t b,
+                  uint8_t r2 = 0, uint8_t g2 = 0, uint8_t b2 = 0, uint8_t speed = 10);
 
 /**
  * Update the ring display (call from animation loop).

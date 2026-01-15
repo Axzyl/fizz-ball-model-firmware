@@ -20,6 +20,7 @@ NPM_MODES = [
     (4, "Solid Color"),
     (5, "Eye Closed"),
     (6, "Eye Open"),
+    (9, "Gradient"),
 ]
 
 # NeoPixel Ring modes (8 LED ring)
@@ -30,6 +31,14 @@ NPR_MODES = [
     (3, "Chase"),
     (4, "Breathe"),
     (5, "Spinner"),
+    (6, "Gradient"),
+]
+
+# RGB Strip modes (matches ESP32 protocol)
+RGB_MODES = [
+    (0, "Solid Color"),
+    (1, "Rainbow"),
+    (2, "Gradient"),
 ]
 
 
@@ -125,20 +134,47 @@ class HardwareTestUI:
         rgb_frame = ttk.LabelFrame(mid_row, text="RGB Strip", padding="5")
         rgb_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
 
-        self.rgb_mode = tk.IntVar(value=0)
-        ttk.Checkbutton(rgb_frame, text="Enable", variable=self.rgb_mode,
-                       command=self._send_rgb).pack(anchor=tk.W)
+        rgb_mode_row = ttk.Frame(rgb_frame)
+        rgb_mode_row.pack(fill=tk.X, pady=2)
+        ttk.Label(rgb_mode_row, text="Mode:").pack(side=tk.LEFT)
+        self.rgb_mode_combo = ttk.Combobox(rgb_mode_row, width=10, state="readonly")
+        self.rgb_mode_combo['values'] = [name for _, name in RGB_MODES]
+        self.rgb_mode_combo.current(0)
+        self.rgb_mode_combo.pack(side=tk.LEFT, padx=5)
+        self.rgb_mode_combo.bind("<<ComboboxSelected>>", lambda e: self._send_rgb())
 
+        # Color 1
+        rgb_c1_row = ttk.Frame(rgb_frame)
+        rgb_c1_row.pack(fill=tk.X)
+        ttk.Label(rgb_c1_row, text="C1:", width=3).pack(side=tk.LEFT)
         self.rgb_vars = []
         for color in ["R", "G", "B"]:
-            row = ttk.Frame(rgb_frame)
-            row.pack(fill=tk.X)
-            ttk.Label(row, text=f"{color}:", width=3).pack(side=tk.LEFT)
-            var = tk.IntVar(value=0)
+            var = tk.IntVar(value=255 if color == "R" else 0)
             self.rgb_vars.append(var)
-            scale = ttk.Scale(row, from_=0, to=255, variable=var, orient=tk.HORIZONTAL, length=100)
+            scale = ttk.Scale(rgb_c1_row, from_=0, to=255, variable=var, orient=tk.HORIZONTAL, length=50)
             scale.pack(side=tk.LEFT)
             scale.bind("<ButtonRelease-1>", lambda e: self._send_rgb())
+
+        # Color 2 (for gradient)
+        rgb_c2_row = ttk.Frame(rgb_frame)
+        rgb_c2_row.pack(fill=tk.X)
+        ttk.Label(rgb_c2_row, text="C2:", width=3).pack(side=tk.LEFT)
+        self.rgb_r2 = tk.IntVar(value=0)
+        self.rgb_g2 = tk.IntVar(value=0)
+        self.rgb_b2 = tk.IntVar(value=255)
+        for var in [self.rgb_r2, self.rgb_g2, self.rgb_b2]:
+            scale = ttk.Scale(rgb_c2_row, from_=0, to=255, variable=var, orient=tk.HORIZONTAL, length=50)
+            scale.pack(side=tk.LEFT)
+            scale.bind("<ButtonRelease-1>", lambda e: self._send_rgb())
+
+        # Speed (for gradient)
+        rgb_speed_row = ttk.Frame(rgb_frame)
+        rgb_speed_row.pack(fill=tk.X)
+        ttk.Label(rgb_speed_row, text="Spd:", width=3).pack(side=tk.LEFT)
+        self.rgb_speed = tk.IntVar(value=10)
+        rgb_speed_scale = ttk.Scale(rgb_speed_row, from_=1, to=50, variable=self.rgb_speed, orient=tk.HORIZONTAL, length=100)
+        rgb_speed_scale.pack(side=tk.LEFT)
+        rgb_speed_scale.bind("<ButtonRelease-1>", lambda e: self._send_rgb())
 
         # Valve controls (simplified: just open/close buttons)
         valve_frame = ttk.LabelFrame(mid_row, text="Valve (auto-closes after 5s)", padding="5")
@@ -208,7 +244,7 @@ class HardwareTestUI:
         npm_row2 = ttk.Frame(npm_frame)
         npm_row2.pack(fill=tk.X, pady=2)
 
-        ttk.Label(npm_row2, text="Color:").pack(side=tk.LEFT)
+        ttk.Label(npm_row2, text="Color 1:").pack(side=tk.LEFT)
         self.npm_r = tk.IntVar(value=255)
         self.npm_g = tk.IntVar(value=0)
         self.npm_b = tk.IntVar(value=0)
@@ -218,6 +254,28 @@ class HardwareTestUI:
             scale = ttk.Scale(npm_row2, from_=0, to=255, variable=var, orient=tk.HORIZONTAL, length=80)
             scale.pack(side=tk.LEFT)
             scale.bind("<ButtonRelease-1>", lambda e: self._send_npm())
+
+        # Color 2 for gradient mode
+        npm_row_c2 = ttk.Frame(npm_frame)
+        npm_row_c2.pack(fill=tk.X, pady=2)
+
+        ttk.Label(npm_row_c2, text="Color 2:").pack(side=tk.LEFT)
+        self.npm_r2 = tk.IntVar(value=0)
+        self.npm_g2 = tk.IntVar(value=0)
+        self.npm_b2 = tk.IntVar(value=255)
+
+        for label, var in [("R", self.npm_r2), ("G", self.npm_g2), ("B", self.npm_b2)]:
+            ttk.Label(npm_row_c2, text=f"  {label}:").pack(side=tk.LEFT)
+            scale = ttk.Scale(npm_row_c2, from_=0, to=255, variable=var, orient=tk.HORIZONTAL, length=80)
+            scale.pack(side=tk.LEFT)
+            scale.bind("<ButtonRelease-1>", lambda e: self._send_npm())
+
+        # Speed for gradient mode
+        ttk.Label(npm_row_c2, text="  Speed:").pack(side=tk.LEFT)
+        self.npm_speed = tk.IntVar(value=10)
+        npm_speed_scale = ttk.Scale(npm_row_c2, from_=1, to=50, variable=self.npm_speed, orient=tk.HORIZONTAL, length=80)
+        npm_speed_scale.pack(side=tk.LEFT)
+        npm_speed_scale.bind("<ButtonRelease-1>", lambda e: self._send_npm())
 
         # Quick color buttons
         npm_row3 = ttk.Frame(npm_frame)
@@ -246,7 +304,7 @@ class HardwareTestUI:
         npr_row2 = ttk.Frame(npr_frame)
         npr_row2.pack(fill=tk.X, pady=2)
 
-        ttk.Label(npr_row2, text="Color:").pack(side=tk.LEFT)
+        ttk.Label(npr_row2, text="Color 1:").pack(side=tk.LEFT)
         self.npr_r = tk.IntVar(value=255)
         self.npr_g = tk.IntVar(value=0)
         self.npr_b = tk.IntVar(value=0)
@@ -256,6 +314,28 @@ class HardwareTestUI:
             scale = ttk.Scale(npr_row2, from_=0, to=255, variable=var, orient=tk.HORIZONTAL, length=80)
             scale.pack(side=tk.LEFT)
             scale.bind("<ButtonRelease-1>", lambda e: self._send_npr())
+
+        # Color 2 for gradient mode
+        npr_row_c2 = ttk.Frame(npr_frame)
+        npr_row_c2.pack(fill=tk.X, pady=2)
+
+        ttk.Label(npr_row_c2, text="Color 2:").pack(side=tk.LEFT)
+        self.npr_r2 = tk.IntVar(value=0)
+        self.npr_g2 = tk.IntVar(value=0)
+        self.npr_b2 = tk.IntVar(value=255)
+
+        for label, var in [("R", self.npr_r2), ("G", self.npr_g2), ("B", self.npr_b2)]:
+            ttk.Label(npr_row_c2, text=f"  {label}:").pack(side=tk.LEFT)
+            scale = ttk.Scale(npr_row_c2, from_=0, to=255, variable=var, orient=tk.HORIZONTAL, length=80)
+            scale.pack(side=tk.LEFT)
+            scale.bind("<ButtonRelease-1>", lambda e: self._send_npr())
+
+        # Speed for gradient mode
+        ttk.Label(npr_row_c2, text="  Speed:").pack(side=tk.LEFT)
+        self.npr_speed = tk.IntVar(value=10)
+        npr_speed_scale = ttk.Scale(npr_row_c2, from_=1, to=50, variable=self.npr_speed, orient=tk.HORIZONTAL, length=80)
+        npr_speed_scale.pack(side=tk.LEFT)
+        npr_speed_scale.bind("<ButtonRelease-1>", lambda e: self._send_npr())
 
         # Quick color buttons
         npr_row3 = ttk.Frame(npr_frame)
@@ -450,11 +530,20 @@ class HardwareTestUI:
         self._send(f"$LGT,{self.light_var.get()}")
 
     def _send_rgb(self):
-        mode = self.rgb_mode.get()
+        mode_idx = self.rgb_mode_combo.current()
+        mode = RGB_MODES[mode_idx][0]
         r = self.rgb_vars[0].get()
         g = self.rgb_vars[1].get()
         b = self.rgb_vars[2].get()
-        self._send(f"$RGB,{mode},{r},{g},{b}")
+        # Gradient mode includes second color and speed
+        if mode == 2:  # RGB_MODE_GRADIENT
+            r2 = self.rgb_r2.get()
+            g2 = self.rgb_g2.get()
+            b2 = self.rgb_b2.get()
+            speed = self.rgb_speed.get()
+            self._send(f"$RGB,{mode},{r},{g},{b},{r2},{g2},{b2},{speed}")
+        else:
+            self._send(f"$RGB,{mode},{r},{g},{b}")
 
     def _send_matrix(self):
         left = self.matrix_left.get()
@@ -469,7 +558,15 @@ class HardwareTestUI:
         r = self.npm_r.get()
         g = self.npm_g.get()
         b = self.npm_b.get()
-        self._send(f"$NPM,{mode},{letter},{r},{g},{b}")
+        # Gradient mode includes second color and speed
+        if mode == 9:  # NPM_MODE_GRADIENT
+            r2 = self.npm_r2.get()
+            g2 = self.npm_g2.get()
+            b2 = self.npm_b2.get()
+            speed = self.npm_speed.get()
+            self._send(f"$NPM,{mode},{letter},{r},{g},{b},{r2},{g2},{b2},{speed}")
+        else:
+            self._send(f"$NPM,{mode},{letter},{r},{g},{b}")
 
     def _set_npm_color(self, r, g, b):
         self.npm_r.set(r)
@@ -484,7 +581,15 @@ class HardwareTestUI:
         r = self.npr_r.get()
         g = self.npr_g.get()
         b = self.npr_b.get()
-        self._send(f"$NPR,{mode},{r},{g},{b}")
+        # Gradient mode includes second color and speed
+        if mode == 6:  # NPR_MODE_GRADIENT
+            r2 = self.npr_r2.get()
+            g2 = self.npr_g2.get()
+            b2 = self.npr_b2.get()
+            speed = self.npr_speed.get()
+            self._send(f"$NPR,{mode},{r},{g},{b},{r2},{g2},{b2},{speed}")
+        else:
+            self._send(f"$NPR,{mode},{r},{g},{b}")
 
     def _set_npr_color(self, r, g, b):
         self.npr_r.set(r)

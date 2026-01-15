@@ -25,6 +25,7 @@
 #define NPM_MODE_EYE_OPEN   6       // Open eye pattern (alert)
 #define NPM_MODE_CIRCLE     7       // Circle icon (for ALIVE state)
 #define NPM_MODE_X          8       // X icon (for DEAD state)
+#define NPM_MODE_GRADIENT   9       // Ping-pong gradient between 2 colors
 
 // Animation speeds
 #define NPM_RAINBOW_SPEED   10      // Rainbow color cycling speed
@@ -53,6 +54,11 @@ typedef struct {
     uint16_t scroll_speed;          // Scroll speed (ms per column shift)
     bool scroll_looping;            // Whether to loop the scroll
     uint8_t prev_scroll_text_id;    // Previous text ID for change detection
+
+    // Gradient mode fields
+    uint8_t r2, g2, b2;             // Second color for gradient
+    uint8_t gradient_speed;         // Animation speed (1-50)
+    uint16_t gradient_position;     // Current position (0-510 for ping-pong)
 } NpmState;
 
 /**
@@ -78,8 +84,13 @@ void npm_state_init(NpmState* state);
  * @param r Red value (0-255)
  * @param g Green value (0-255)
  * @param b Blue value (0-255)
+ * @param r2 Gradient second color red (0-255)
+ * @param g2 Gradient second color green (0-255)
+ * @param b2 Gradient second color blue (0-255)
+ * @param speed Gradient animation speed (1-50)
  */
-void npm_set_mode(NpmState* state, uint8_t mode, char letter, uint8_t r, uint8_t g, uint8_t b);
+void npm_set_mode(NpmState* state, uint8_t mode, char letter, uint8_t r, uint8_t g, uint8_t b,
+                  uint8_t r2 = 0, uint8_t g2 = 0, uint8_t b2 = 0, uint8_t speed = 10);
 
 /**
  * Update the matrix display (call from animation loop).

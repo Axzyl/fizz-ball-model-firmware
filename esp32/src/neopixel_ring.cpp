@@ -1,4 +1,5 @@
 #include "neopixel_ring.h"
+#include "color_utils.h"
 
 // NeoPixel strip object
 static Adafruit_NeoPixel* npr_strip = nullptr;
@@ -50,14 +51,25 @@ void npr_state_init(NprState* state) {
     state->breathe_direction = 1;
     state->last_update = 0;
     state->needs_update = true;
+    // Gradient fields
+    state->r2 = 0;
+    state->g2 = 0;
+    state->b2 = 0;
+    state->gradient_speed = 10;
+    state->gradient_position = 0;
 }
 
-void npr_set_mode(NprState* state, uint8_t mode, uint8_t r, uint8_t g, uint8_t b) {
+void npr_set_mode(NprState* state, uint8_t mode, uint8_t r, uint8_t g, uint8_t b,
+                  uint8_t r2, uint8_t g2, uint8_t b2, uint8_t speed) {
     // Check if anything changed
     if (state->mode != mode ||
         state->r != r ||
         state->g != g ||
-        state->b != b) {
+        state->b != b ||
+        state->r2 != r2 ||
+        state->g2 != g2 ||
+        state->b2 != b2 ||
+        state->gradient_speed != speed) {
         state->needs_update = true;
 
         // Reset animation state on mode change
@@ -65,6 +77,7 @@ void npr_set_mode(NprState* state, uint8_t mode, uint8_t r, uint8_t g, uint8_t b
             state->animation_offset = 0;
             state->breathe_value = 0;
             state->breathe_direction = 1;
+            state->gradient_position = 0;
         }
     }
 
@@ -72,6 +85,10 @@ void npr_set_mode(NprState* state, uint8_t mode, uint8_t r, uint8_t g, uint8_t b
     state->r = r;
     state->g = g;
     state->b = b;
+    state->r2 = r2;
+    state->g2 = g2;
+    state->b2 = b2;
+    state->gradient_speed = (speed > 0) ? speed : 1;  // Ensure minimum speed of 1
 }
 
 void npr_update(NprState* state) {
@@ -147,6 +164,33 @@ void npr_update(NprState* state) {
                 state->animation_offset++;
                 state->last_update = now;
             }
+            state->prev_mode = state->mode;
+            return;
+        }
+
+        case NPR_MODE_GRADIENT: {
+            // Ping-pong gradient between two colors
+            uint8_t t = gradient_position_to_t(state->gradient_position);
+
+            uint8_t r, g, b;
+            gradient_color(t, state->r, state->g, state->b,
+                          state->r2, state->g2, state->b2, &r, &g, &b);
+
+            // Skip update if lerp produced black (edge case bug workaround)
+            if (r == 0 && g == 0 && b == 0) {
+                state->gradient_position = gradient_advance_pingpong(
+                    state->gradient_position, state->gradient_speed);
+                return;
+            }
+
+            uint32_t color = npr_strip->Color(r, g, b);
+            for (int i = 0; i < NPR_NUM_PIXELS; i++) {
+                npr_strip->setPixelColor(i, color);
+            }
+            npr_strip->show();
+
+            state->gradient_position = gradient_advance_pingpong(
+                state->gradient_position, state->gradient_speed);
             state->prev_mode = state->mode;
             return;
         }

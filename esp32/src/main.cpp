@@ -40,6 +40,7 @@ DeviceState g_state;
 ValveState g_valve_state;
 NpmState g_npm_state;
 NprState g_npr_state;
+RgbState g_rgb_state;
 MatrixScrollState g_matrix_scroll_state;
 
 // Mutex for protecting shared state
@@ -115,44 +116,25 @@ void comm_task(void* pvParameters) {
 // =============================================================================
 void animation_task(void* pvParameters) {
     const TickType_t period = pdMS_TO_TICKS(ANIMATION_TASK_PERIOD_MS);
-    uint16_t rainbow_hue = 0;
 
     DEBUG_PRINTF("[RTOS] Animation task started on Core %d\n", xPortGetCoreID());
 
     for (;;) {
         TickType_t task_start = xTaskGetTickCount();
 
-        // Update NeoPixel matrix
+        // Update NeoPixel matrix (no mutex needed - state is simple)
         npm_update(&g_npm_state);
 
-        // Update NeoPixel ring animation
+        // Update NeoPixel ring animation (no mutex needed - state is simple)
         npr_update(&g_npr_state);
 
-        // Update MAX7219 LED matrix scrolling text
+        // Update MAX7219 LED matrix scrolling text (no mutex needed)
         led_matrix_update_scroll(&g_matrix_scroll_state);
 
-        // Update RGB strip rainbow animation if in rainbow mode
+        // Update RGB strip animation with mutex protection
+        // (consistent with how control_task sets the state)
         if (state_lock(pdMS_TO_TICKS(5))) {
-            if (g_state.command.rgb_mode == 1 && g_state.output.light_on) {
-                // Rainbow mode - cycle through colors
-                uint8_t region = rainbow_hue / 43;
-                uint8_t remainder = (rainbow_hue - (region * 43)) * 6;
-                uint8_t r, g, b;
-                uint8_t q = 255 - remainder;
-                uint8_t t = remainder;
-
-                switch (region) {
-                    case 0:  r = 255; g = t;   b = 0;   break;
-                    case 1:  r = q;   g = 255; b = 0;   break;
-                    case 2:  r = 0;   g = 255; b = t;   break;
-                    case 3:  r = 0;   g = q;   b = 255; break;
-                    case 4:  r = t;   g = 0;   b = 255; break;
-                    default: r = 255; g = 0;   b = q;   break;
-                }
-
-                rgb_set(r, g, b);
-                rainbow_hue = (rainbow_hue + 2) % 256;
-            }
+            rgb_update(&g_rgb_state);
             state_unlock();
         }
 
@@ -173,6 +155,13 @@ void control_task(void* pvParameters) {
     uint8_t prev_rgb_mode = 255;
     uint8_t prev_rgb_r = 255, prev_rgb_g = 255, prev_rgb_b = 255;
     uint8_t prev_light_cmd = 255;
+    // NPM tracking
+    uint8_t prev_npm_mode = 255;
+    uint8_t prev_npm_r = 255, prev_npm_g = 255, prev_npm_b = 255;
+    char prev_npm_letter = 0;
+    // NPR tracking
+    uint8_t prev_npr_mode = 255;
+    uint8_t prev_npr_r = 255, prev_npr_g = 255, prev_npr_b = 255;
 
     DEBUG_PRINTF("[RTOS] Control task started on Core %d\n", xPortGetCoreID());
 
@@ -227,11 +216,15 @@ void control_task(void* pvParameters) {
                 prev_matrix_right = right;
             }
 
-            // Update RGB strip solid color (rainbow handled in animation task)
+            // Update RGB strip mode (animations handled in animation task)
             uint8_t mode = g_state.command.rgb_mode;
             uint8_t r = g_state.command.rgb_r;
             uint8_t g = g_state.command.rgb_g;
             uint8_t b = g_state.command.rgb_b;
+            uint8_t r2 = g_state.command.rgb_r2;
+            uint8_t g2 = g_state.command.rgb_g2;
+            uint8_t b2 = g_state.command.rgb_b2;
+            uint8_t rgb_speed = g_state.command.rgb_gradient_speed;
             uint8_t light_cmd = g_state.command.light_command;
 
             bool should_be_on = false;
@@ -239,22 +232,30 @@ void control_task(void* pvParameters) {
                 case LIGHT_CMD_OFF: should_be_on = false; break;
                 case LIGHT_CMD_ON:  should_be_on = true;  break;
                 case LIGHT_CMD_AUTO:
-                    should_be_on = (mode == 1) || (r > 0 || g > 0 || b > 0);
+                    // Mode 1=rainbow, 2=gradient are animated, or any color set
+                    should_be_on = (mode >= RGB_MODE_RAINBOW) || (r > 0 || g > 0 || b > 0);
                     break;
             }
 
-            if (!should_be_on) {
-                if (prev_light_cmd != LIGHT_CMD_OFF || prev_rgb_r != 0 || prev_rgb_g != 0 || prev_rgb_b != 0) {
-                    rgb_off();
+            // Only update RGB state when something actually changed
+            // This prevents control_task from interfering with animation_task's gradient animation
+            bool rgb_changed = (should_be_on != g_state.output.light_on) ||
+                               (mode != prev_rgb_mode) ||
+                               (r != prev_rgb_r) || (g != prev_rgb_g) || (b != prev_rgb_b);
+
+            if (rgb_changed) {
+                if (!should_be_on) {
+                    // Turn off - set to solid black
+                    rgb_set_mode(&g_rgb_state, RGB_MODE_SOLID, 0, 0, 0, 0, 0, 0, 10);
                     prev_rgb_r = 0;
                     prev_rgb_g = 0;
                     prev_rgb_b = 0;
-                }
-            } else if (mode == 0) {
-                // Solid color mode
-                if (r == 0 && g == 0 && b == 0) { r = g = b = 255; }
-                if (r != prev_rgb_r || g != prev_rgb_g || b != prev_rgb_b || mode != prev_rgb_mode) {
-                    rgb_set(r, g, b);
+                } else {
+                    // Use default white if solid mode with no color set
+                    if (mode == RGB_MODE_SOLID && r == 0 && g == 0 && b == 0) {
+                        r = g = b = 255;
+                    }
+                    rgb_set_mode(&g_rgb_state, mode, r, g, b, r2, g2, b2, rgb_speed);
                     prev_rgb_r = r;
                     prev_rgb_g = g;
                     prev_rgb_b = b;
@@ -265,20 +266,50 @@ void control_task(void* pvParameters) {
             prev_rgb_mode = mode;
             state_update_light(&g_state, should_be_on);
 
-            // Update NeoPixel matrix colors from command (text selection is autonomous)
-            npm_set_mode(&g_npm_state,
-                        g_state.command.npm_mode,
-                        g_state.command.npm_letter,
-                        g_state.command.npm_r,
-                        g_state.command.npm_g,
-                        g_state.command.npm_b);
+            // Update NeoPixel matrix only when values change (prevents gradient flicker)
+            {
+                uint8_t npm_mode = g_state.command.npm_mode;
+                char npm_letter = g_state.command.npm_letter;
+                uint8_t npm_r = g_state.command.npm_r;
+                uint8_t npm_g = g_state.command.npm_g;
+                uint8_t npm_b = g_state.command.npm_b;
 
-            // Update NeoPixel ring mode
-            npr_set_mode(&g_npr_state,
-                        g_state.command.npr_mode,
-                        g_state.command.npr_r,
-                        g_state.command.npr_g,
-                        g_state.command.npr_b);
+                bool npm_changed = (npm_mode != prev_npm_mode) ||
+                                   (npm_letter != prev_npm_letter) ||
+                                   (npm_r != prev_npm_r) || (npm_g != prev_npm_g) || (npm_b != prev_npm_b);
+
+                if (npm_changed) {
+                    npm_set_mode(&g_npm_state, npm_mode, npm_letter, npm_r, npm_g, npm_b,
+                                g_state.command.npm_r2, g_state.command.npm_g2,
+                                g_state.command.npm_b2, g_state.command.npm_gradient_speed);
+                    prev_npm_mode = npm_mode;
+                    prev_npm_letter = npm_letter;
+                    prev_npm_r = npm_r;
+                    prev_npm_g = npm_g;
+                    prev_npm_b = npm_b;
+                }
+            }
+
+            // Update NeoPixel ring only when values change (prevents gradient flicker)
+            {
+                uint8_t npr_mode = g_state.command.npr_mode;
+                uint8_t npr_r = g_state.command.npr_r;
+                uint8_t npr_g = g_state.command.npr_g;
+                uint8_t npr_b = g_state.command.npr_b;
+
+                bool npr_changed = (npr_mode != prev_npr_mode) ||
+                                   (npr_r != prev_npr_r) || (npr_g != prev_npr_g) || (npr_b != prev_npr_b);
+
+                if (npr_changed) {
+                    npr_set_mode(&g_npr_state, npr_mode, npr_r, npr_g, npr_b,
+                                g_state.command.npr_r2, g_state.command.npr_g2,
+                                g_state.command.npr_b2, g_state.command.npr_gradient_speed);
+                    prev_npr_mode = npr_mode;
+                    prev_npr_r = npr_r;
+                    prev_npr_g = npr_g;
+                    prev_npr_b = npr_b;
+                }
+            }
 
             state_unlock();
         }
@@ -345,6 +376,7 @@ void setup() {
     valve_safety_init(&g_valve_state);
     npm_state_init(&g_npm_state);
     npr_state_init(&g_npr_state);
+    rgb_state_init(&g_rgb_state);
     led_matrix_scroll_init(&g_matrix_scroll_state);
 
     // Initialize hardware components
