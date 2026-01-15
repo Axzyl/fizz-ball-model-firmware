@@ -187,6 +187,9 @@ class UartComm(threading.Thread):
         # Track last sent values to detect changes
         self._last_sent = LastSentState()
 
+        # Flag to force sending all commands (used for shutdown)
+        self._force_send_all = False
+
     def run(self) -> None:
         """Main UART communication loop."""
         mode_str = "MOCK" if self.mock_mode else "HARDWARE"
@@ -282,9 +285,8 @@ class UartComm(threading.Thread):
                 timeout=config.UART_TIMEOUT,
                 write_timeout=config.UART_TIMEOUT,
             )
-            # Disable DTR/RTS to prevent ESP32 reset on connection
-            self.serial.dtr = False
-            self.serial.rts = False
+            # Use default DTR/RTS settings (like hardware_test.py)
+            # This allows ESP32 to reset when serial port closes
             self.protocol.reset()
             return True
 
@@ -379,6 +381,17 @@ class UartComm(threading.Thread):
             except Exception as e:
                 logger.warning(f"Error closing UART: {e}")
         self.serial = None
+
+    def force_send_all(self) -> None:
+        """
+        Force sending all command values on next transmit cycle.
+
+        Used during shutdown to ensure ESP32 receives final state
+        even if values haven't changed.
+        """
+        self._force_send_all = True
+        # Reset last sent state to force all values to be sent
+        self._last_sent = LastSentState()
 
     def _receive(self) -> None:
         """Receive and process data from UART."""

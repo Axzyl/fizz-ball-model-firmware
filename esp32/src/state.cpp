@@ -11,12 +11,16 @@ void state_init(DeviceState* state) {
         state->output.servo_angles[i] = SERVO_CENTER_ANGLE;
         state->output.servo_moving[i] = false;
     }
+    // Valve servo starts at closed position
+    state->output.servo_angles[VALVE_SERVO_INDEX] = VALVE_CLOSED_ANGLE;
     state->output.light_on = false;
 
     // Initialize command state
     for (int i = 0; i < NUM_SERVOS; i++) {
         state->command.target_servo_angles[i] = SERVO_CENTER_ANGLE;
     }
+    // Valve servo target starts at closed position
+    state->command.target_servo_angles[VALVE_SERVO_INDEX] = VALVE_CLOSED_ANGLE;
     state->command.light_command = LIGHT_CMD_AUTO;
     state->command.flags = 0;
 

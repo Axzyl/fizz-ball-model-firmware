@@ -32,11 +32,13 @@ NUM_SERVOS = 3
 # NeoPixel Matrix modes
 NPM_MODE_OFF = 0        # All LEDs off
 NPM_MODE_LETTER = 1     # Display a single letter
-NPM_MODE_SCROLL = 2     # Scroll text across matrix (use SCROLL_TEXT_* constants)
+NPM_MODE_SCROLL = 2     # Scroll text (NOT USED per spec - no text on matrix)
 NPM_MODE_RAINBOW = 3    # Rainbow animation
 NPM_MODE_SOLID = 4      # Solid color fill
-NPM_MODE_EYE_CLOSED = 5 # Closed eye pattern (sleeping)
-NPM_MODE_EYE_OPEN = 6   # Open eye pattern (alert)
+NPM_MODE_EYE_CLOSED = 5 # Closed eye pattern (for IDLE)
+NPM_MODE_EYE_OPEN = 6   # Open eye pattern (for TRACKING)
+NPM_MODE_CIRCLE = 7     # Circle/filled icon (for ALIVE)
+NPM_MODE_X = 8          # X icon (for DEAD)
 
 # Scroll text IDs (for NPM_MODE_SCROLL)
 # Pass as letter field: '0' for SCHRODINGER, '1' for ALIVE, etc.

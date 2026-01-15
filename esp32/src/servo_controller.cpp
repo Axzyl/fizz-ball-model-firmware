@@ -15,11 +15,11 @@ static const uint8_t servo_channels[NUM_SERVOS] = {
     SERVO_3_PWM_CHANNEL
 };
 
-// Current servo angles
+// Current servo angles (valve servo starts at closed position)
 static float current_angles[NUM_SERVOS] = {
     SERVO_CENTER_ANGLE,
     SERVO_CENTER_ANGLE,
-    SERVO_CENTER_ANGLE
+    VALVE_CLOSED_ANGLE  // Valve servo (index 2)
 };
 
 /**
@@ -52,8 +52,9 @@ void servo_init() {
         ledcSetup(servo_channels[i], SERVO_PWM_FREQ, SERVO_PWM_RESOLUTION);
         ledcAttachPin(servo_pins[i], servo_channels[i]);
 
-        // Move to center position
-        servo_set_angle(i, SERVO_CENTER_ANGLE);
+        // Move to initial position (valve starts closed, others at center)
+        float initial_angle = (i == VALVE_SERVO_INDEX) ? VALVE_CLOSED_ANGLE : SERVO_CENTER_ANGLE;
+        servo_set_angle(i, initial_angle);
 
         DEBUG_PRINTF("Servo %d initialized on pin %d, channel %d\n",
                      i + 1, servo_pins[i], servo_channels[i]);

@@ -18,11 +18,13 @@
 // Matrix modes
 #define NPM_MODE_OFF        0       // All LEDs off
 #define NPM_MODE_LETTER     1       // Display a single letter (A-Z)
-#define NPM_MODE_SCROLL     2       // Scroll text (not implemented yet)
+#define NPM_MODE_SCROLL     2       // Scroll text
 #define NPM_MODE_RAINBOW    3       // Rainbow animation
 #define NPM_MODE_SOLID      4       // Solid color fill
 #define NPM_MODE_EYE_CLOSED 5       // Closed eye pattern (sleeping)
 #define NPM_MODE_EYE_OPEN   6       // Open eye pattern (alert)
+#define NPM_MODE_CIRCLE     7       // Circle icon (for ALIVE state)
+#define NPM_MODE_X          8       // X icon (for DEAD state)
 
 // Animation speeds
 #define NPM_RAINBOW_SPEED   10      // Rainbow color cycling speed
@@ -135,6 +137,24 @@ void npm_display_eye_closed(uint8_t r, uint8_t g, uint8_t b);
  * @param b Blue value (0-255)
  */
 void npm_display_eye_open(uint8_t r, uint8_t g, uint8_t b);
+
+/**
+ * Display circle icon (for ALIVE state).
+ *
+ * @param r Red value (0-255)
+ * @param g Green value (0-255)
+ * @param b Blue value (0-255)
+ */
+void npm_display_circle(uint8_t r, uint8_t g, uint8_t b);
+
+/**
+ * Display X icon (for DEAD state).
+ *
+ * @param r Red value (0-255)
+ * @param g Green value (0-255)
+ * @param b Blue value (0-255)
+ */
+void npm_display_x(uint8_t r, uint8_t g, uint8_t b);
 
 /**
  * Update rainbow animation (call periodically).

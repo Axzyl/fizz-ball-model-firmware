@@ -54,6 +54,24 @@ static const uint8_t eye_open_pattern[5] = {
     0b01110
 };
 
+// Circle pattern (for ALIVE state - filled circle)
+static const uint8_t circle_pattern[5] = {
+    0b01110,
+    0b11111,
+    0b11111,
+    0b11111,
+    0b01110
+};
+
+// X pattern (for DEAD state)
+static const uint8_t x_pattern[5] = {
+    0b10001,
+    0b01010,
+    0b00100,
+    0b01010,
+    0b10001
+};
+
 // Convert HSV to RGB color
 static uint32_t hsvToColor(uint16_t hue, uint8_t sat, uint8_t val) {
     uint8_t r, g, b;
@@ -193,6 +211,20 @@ void npm_update(NpmState* state) {
             }
             break;
 
+        case NPM_MODE_CIRCLE:
+            if (mode_changed || state->needs_update ||
+                state->r != state->prev_r || state->g != state->prev_g || state->b != state->prev_b) {
+                npm_display_circle(state->r, state->g, state->b);
+            }
+            break;
+
+        case NPM_MODE_X:
+            if (mode_changed || state->needs_update ||
+                state->r != state->prev_r || state->g != state->prev_g || state->b != state->prev_b) {
+                npm_display_x(state->r, state->g, state->b);
+            }
+            break;
+
         default:
             npm_clear();
             break;
@@ -287,6 +319,42 @@ void npm_display_eye_open(uint8_t r, uint8_t g, uint8_t b) {
     for (int row = 0; row < 5; row++) {
         for (int col = 0; col < 5; col++) {
             if (eye_open_pattern[row] & (0b00001 << col)) {
+                int pixel = row * 5 + col;
+                npm_strip->setPixelColor(pixel, color);
+            }
+        }
+    }
+    npm_strip->show();
+}
+
+void npm_display_circle(uint8_t r, uint8_t g, uint8_t b) {
+    if (npm_strip == nullptr) return;
+
+    npm_strip->clear();
+    uint32_t color = npm_strip->Color(r, g, b);
+
+    // Draw circle pattern
+    for (int row = 0; row < 5; row++) {
+        for (int col = 0; col < 5; col++) {
+            if (circle_pattern[row] & (0b00001 << col)) {
+                int pixel = row * 5 + col;
+                npm_strip->setPixelColor(pixel, color);
+            }
+        }
+    }
+    npm_strip->show();
+}
+
+void npm_display_x(uint8_t r, uint8_t g, uint8_t b) {
+    if (npm_strip == nullptr) return;
+
+    npm_strip->clear();
+    uint32_t color = npm_strip->Color(r, g, b);
+
+    // Draw X pattern
+    for (int row = 0; row < 5; row++) {
+        for (int col = 0; col < 5; col++) {
+            if (x_pattern[row] & (0b00001 << col)) {
                 int pixel = row * 5 + col;
                 npm_strip->setPixelColor(pixel, color);
             }

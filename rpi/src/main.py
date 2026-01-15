@@ -219,6 +219,7 @@ class Application:
     def __init__(self) -> None:
         self.state = AppState()
         self.stop_event = threading.Event()
+        self._shutdown_in_progress = False
 
         # Components
         self.vision_thread: Optional[VisionThread] = None
@@ -271,7 +272,17 @@ class Application:
 
     def stop(self) -> None:
         """Stop all components."""
+        # Prevent multiple shutdown calls
+        if self._shutdown_in_progress:
+            return
+        self._shutdown_in_progress = True
+
         logger.info("Stopping application...")
+
+        # Send shutdown commands to ESP32 before stopping threads
+        self._send_shutdown_commands()
+
+        # Now signal threads to stop
         self.stop_event.set()
 
         # Wait for threads to finish
@@ -285,6 +296,53 @@ class Application:
             self.uart_comm.join(timeout=2.0)
 
         logger.info("Application stopped")
+
+    def _send_shutdown_commands(self) -> None:
+        """Send shutdown commands to turn off all LEDs and reset servos."""
+        if not self.uart_comm:
+            return
+
+        logger.info("Sending shutdown commands to ESP32...")
+
+        # Force UART to send all values even if they haven't changed
+        self.uart_comm.force_send_all()
+
+        # Set all outputs to off/default state
+        self.state.set_command(
+            # Servos to center
+            servo_target_1=90.0,
+            servo_target_2=90.0,
+            # Valve closed
+            valve_open=False,
+            # RGB strip off
+            rgb_mode=0,
+            rgb_r=0,
+            rgb_g=0,
+            rgb_b=0,
+            # NeoPixel matrix off
+            npm_mode=0,  # NPM_OFF
+            npm_letter="A",
+            npm_r=0,
+            npm_g=0,
+            npm_b=0,
+            # NeoPixel ring off
+            npr_mode=0,  # NPR_OFF
+            npr_r=0,
+            npr_g=0,
+            npr_b=0,
+            # MAX7219 matrix off
+            matrix_left=0,
+            matrix_right=0,
+            # Light off
+            light_command=0,
+        )
+
+        # Give UART thread time to send the commands
+        # The UART thread sends at UART_TX_RATE_HZ (default 30Hz = 33ms)
+        # Wait long enough for at least 2-3 transmit cycles
+        time.sleep(0.15)
+
+        logger.info("Shutdown commands sent")
 
 
 def main() -> int:
@@ -302,9 +360,14 @@ def main() -> int:
 
     try:
         app.start()
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt received")
     except Exception as e:
         logger.error(f"Application error: {e}")
         return 1
+    finally:
+        # Ensure cleanup happens even on exceptions
+        app.stop()
 
     return 0
 
