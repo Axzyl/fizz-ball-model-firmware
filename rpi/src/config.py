@@ -103,6 +103,39 @@ CAMERA_HEIGHT = 480*2
 CAMERA_FPS = 30
 CAMERA_MAX_FAILURES = 30  # Consecutive failures before declaring disconnect (~1s at 30fps)
 
+# Dark frame detection (door closed detection)
+# When the door is closed, the camera sees darkness. However, internal LEDs (strip lights,
+# neopixels) may produce some ambient light even with the door closed.
+#
+# Two detection methods available:
+#   1. Brightness only: Simple threshold on pixel brightness
+#   2. Brightness + Variance: Also checks color uniformity (more robust)
+#
+# DARK_THRESHOLD: Brightness level (0-255) below which frame is considered "dark"
+#   - Lower values = stricter (requires complete darkness)
+#   - Higher values = more lenient (tolerates some internal LED light)
+#   - Typical range: 15-50 depending on internal LED brightness
+#
+# DARK_PERCENTILE: What percentage of pixels must be below threshold (0-100)
+#   - 50 = median (half of pixels must be dark)
+#   - 90 = most of the frame must be dark (ignores bright LED spots)
+#   - Higher values = more robust to small bright spots from LEDs
+#
+# DARK_USE_VARIANCE: Enable variance-based detection (True/False)
+#   - When True: Both brightness AND variance must indicate "closed"
+#   - Helps distinguish closed door (uniform dark) from dark room (varied dark objects)
+#
+# DARK_VARIANCE_THRESHOLD: Maximum std deviation for "uniform" colors (0-100)
+#   - Lower values = stricter (requires very uniform colors)
+#   - Door closed typically has std dev ~5-15
+#   - Door open typically has std dev ~30+
+#
+# Tuning: Use test_brightness.py to find optimal values for your setup
+DARK_THRESHOLD = 25  # 0-255 scale - raised from 15 to tolerate some internal LED light
+DARK_PERCENTILE = 75  # Use 75th percentile (robust to bright LED spots)
+DARK_USE_VARIANCE = False  # Set True to also check color uniformity
+DARK_VARIANCE_THRESHOLD = 20  # Std dev below this = uniform (door closed)
+
 # Platform-specific camera backend
 if IS_WINDOWS:
     CAMERA_BACKEND = None  # Use default (DirectShow)
@@ -159,17 +192,19 @@ SERVO_DEADZONE = 2.0  # degrees - don't move if target within this range
 # -----------------------------------------------------------------------------
 # Face Tracking (State Machine)
 # -----------------------------------------------------------------------------
-TRACKING_VELOCITY_GAIN = 0.1  # How fast servo follows face position (0.0-1.0)
-TRACKING_MAX_VELOCITY = 4.0    # Max servo movement per tick in degrees (higher = faster)
+TRACKING_VELOCITY_GAIN = 0.05  # How fast servo follows face position (0.0-1.0)
+TRACKING_MAX_VELOCITY = 3.0    # Max servo movement per tick in degrees (higher = faster)
+TRACKING_MIN_VELOCITY = 0.5    # Min servo movement per tick when outside deadzone (degrees)
 TRACKING_DEADZONE = 0.05       # Fraction of frame width to ignore (0.05 = 5%)
 TRACKING_MIN_WIDTH_RATIO = 0.06 # Min face width ratio to track (0.15 = 15% of frame width)
 
 # -----------------------------------------------------------------------------
 # Dispensing / Pour Settings
 # -----------------------------------------------------------------------------
-POUR_DURATION = 2.0           # How long valve stays open when limit switch pressed (seconds)
-DISPENSE_FLASH_DURATION = 2.0 # How long red flash continues after dispense (seconds)
+POUR_DURATION = 10.0           # How long valve stays open when limit switch pressed (seconds)
+DISPENSE_FLASH_DURATION = 10.0 # How long aqua flash continues after dispense (seconds)
 REJECT_FLASH_DURATION = 1.0   # How long red flash on reject/repeat press (seconds)
+DISPENSE_HOLD_DURATION = 1.0  # How long limit switch must be held to start dispense (seconds)
 
 # -----------------------------------------------------------------------------
 # State Durations (seconds)
@@ -179,7 +214,7 @@ COLLAPSE_DURATION = 2.0       # Quantum collapse animation duration (door open)
 # -----------------------------------------------------------------------------
 # Arm Wave Settings
 # -----------------------------------------------------------------------------
-ARM_WAVE_INTERVAL = 3.0       # Seconds between periodic arm waves when person detected
+ARM_WAVE_INTERVAL = 4.0       # Seconds between periodic arm waves when person detected
 
 # -----------------------------------------------------------------------------
 # Light Control

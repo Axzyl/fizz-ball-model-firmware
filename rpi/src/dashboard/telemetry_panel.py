@@ -217,6 +217,16 @@ class TelemetryPanel:
         y = self._draw_value(panel, "Tracker FPS", f"{system.face_tracker_fps:.1f}", y)
         y = self._draw_value(panel, "Camera", "Connected" if face.camera_connected else "Disconnected", y,
                              config.COLOR_FACING_YES if face.camera_connected else config.COLOR_FACING_NO)
+        # Frame brightness for dark threshold tuning (shows percentile-based value)
+        dark_thresh = getattr(config, 'DARK_THRESHOLD', 25)
+        bright_color = config.COLOR_FACING_NO if face.is_dark else config.COLOR_FACING_YES
+        y = self._draw_value(panel, "Brightness", f"{face.frame_brightness:.0f} (thresh: {dark_thresh})", y, bright_color)
+        # Frame variance for uniformity detection (optional)
+        use_variance = getattr(config, 'DARK_USE_VARIANCE', False)
+        if use_variance:
+            var_thresh = getattr(config, 'DARK_VARIANCE_THRESHOLD', 20)
+            var_color = config.COLOR_FACING_NO if face.frame_variance < var_thresh else config.COLOR_FACING_YES
+            y = self._draw_value(panel, "Variance", f"{face.frame_variance:.1f} (thresh: {var_thresh})", y, var_color)
         y = self._draw_value(panel, "UART", "Connected" if esp.connected else "Disconnected", y,
                              config.COLOR_FACING_YES if esp.connected else config.COLOR_FACING_NO)
         y = self._draw_value(panel, "UART TX", str(system.uart_tx_count), y)

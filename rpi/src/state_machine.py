@@ -101,6 +101,7 @@ class StateMachineConfig:
     tracking_velocity_gain: float = None  # How fast base rotates
     tracking_deadzone: float = None       # Deadzone as fraction of frame
     tracking_max_velocity: float = None   # Max rotation speed degrees/tick
+    tracking_min_velocity: float = None   # Min rotation speed when outside deadzone
     tracking_invert_direction: bool = False  # Invert tracking direction
     tracking_base_min: float = 0.0   # Minimum base servo angle
     tracking_base_max: float = 180.0  # Maximum base servo angle
@@ -113,15 +114,16 @@ class StateMachineConfig:
     dispense_duration: float = None       # How long valve stays open
     dispense_flash_duration: float = None # How long to flash during dispense
     reject_flash_duration: float = None   # How long to flash on reject
+    dispense_hold_duration: float = None  # How long to hold switch before dispense
 
     # Door detection thresholds
     dark_to_inactive_duration: float = 2.0  # Seconds of darkness to enter INACTIVE
     light_to_collapse_duration: float = 1.0  # Seconds of light to trigger COLLAPSE
 
     # Arm wave parameters
-    arm_wave_min: float = 60.0
-    arm_wave_max: float = 120.0
-    arm_wave_speed: float = 2.0   # Degrees per tick
+    arm_wave_min: float = 45.0    # Lower for more dramatic wave
+    arm_wave_max: float = 135.0   # Higher for more dramatic wave
+    arm_wave_speed: float = 4.0   # Degrees per tick (faster wave)
     arm_wave_interval: float = None  # Seconds between waves when detected
 
     # Shake parameters (for reject animation)
@@ -140,6 +142,8 @@ class StateMachineConfig:
             self.tracking_deadzone = getattr(config, 'TRACKING_DEADZONE', 0.067)
         if self.tracking_max_velocity is None:
             self.tracking_max_velocity = getattr(config, 'TRACKING_MAX_VELOCITY', 4.0)
+        if self.tracking_min_velocity is None:
+            self.tracking_min_velocity = getattr(config, 'TRACKING_MIN_VELOCITY', 0.5)
         if self.tracking_min_width_ratio is None:
             self.tracking_min_width_ratio = getattr(config, 'TRACKING_MIN_WIDTH_RATIO', 0.15)
         # State durations
@@ -152,6 +156,8 @@ class StateMachineConfig:
             self.dispense_flash_duration = getattr(config, 'DISPENSE_FLASH_DURATION', 2.0)
         if self.reject_flash_duration is None:
             self.reject_flash_duration = getattr(config, 'REJECT_FLASH_DURATION', 1.0)
+        if self.dispense_hold_duration is None:
+            self.dispense_hold_duration = getattr(config, 'DISPENSE_HOLD_DURATION', 1.0)
         # Arm wave interval
         if self.arm_wave_interval is None:
             self.arm_wave_interval = getattr(config, 'ARM_WAVE_INTERVAL', 5.0)
@@ -190,6 +196,7 @@ class StateMachine:
         # Timing for behaviors
         self._dispense_start: float = 0.0
         self._reject_start: float = 0.0
+        self._limit_switch_hold_start: float = 0.0  # When limit switch was first pressed
 
         # Outcome
         self._outcome: Optional[str] = None  # "ALIVE" or "DEAD"
@@ -255,7 +262,6 @@ class StateMachine:
     def _start_wave(self) -> None:
         """Start arm wave animation."""
         self._wave_active = True
-        self._last_wave_time = time.time()
         self.arm_wave_position = 90.0
         self._arm_wave_direction = 1
 
@@ -274,6 +280,8 @@ class StateMachine:
             # One full wave cycle complete
             self._wave_active = False
             self.arm_wave_position = 90.0
+            # Record when wave ended so next wave triggers after interval
+            self._last_wave_time = time.time()
 
         return self.arm_wave_position
 
@@ -458,19 +466,31 @@ class StateMachine:
             if reject_elapsed < self.config.reject_flash_duration:
                 return AliveBehavior.DISPENSE_REJECT
 
-        # Limit switch pressed - check for dispense or reject
+        # Limit switch handling
         if esp.limit_triggered:
             if not self._has_dispensed:
-                # Start dispense - mark as dispensed IMMEDIATELY to prevent double-dispense
-                self._has_dispensed = True
-                self._dispense_start = time.time()
-                return AliveBehavior.DISPENSING
+                # First dispense - requires holding for dispense_hold_duration
+                if self._limit_switch_hold_start == 0:
+                    # Start tracking hold time
+                    self._limit_switch_hold_start = time.time()
+
+                hold_elapsed = time.time() - self._limit_switch_hold_start
+                if hold_elapsed >= self.config.dispense_hold_duration:
+                    # Held long enough - start dispense
+                    self._has_dispensed = True
+                    self._dispense_start = time.time()
+                    self._limit_switch_hold_start = 0  # Reset for next time
+                    return AliveBehavior.DISPENSING
+                # Still holding, not long enough yet - continue with normal behavior
             else:
-                # Already dispensed - reject
+                # Already dispensed - reject immediately (no hold required)
                 self._reject_start = time.time()
                 self._shake_offset = 0.0
                 self._shake_direction = 1
                 return AliveBehavior.DISPENSE_REJECT
+        else:
+            # Limit switch released - reset hold timer
+            self._limit_switch_hold_start = 0
 
         # Face detection behavior (tracking cutoff is separate - handled in velocity calc)
         if face.detected:
@@ -526,17 +546,15 @@ class StateMachine:
         )
 
         # Periodic arm wave - triggers every arm_wave_interval seconds
-        # Also triggers immediately when first entering DETECTED after entry animation
         arm_pos = 90.0
         now = time.time()
         time_since_last_wave = now - self._last_wave_time
-        just_finished_entry = self.get_time_in_state() < (self.config.alive_entry_duration + 0.5)
 
-        if not self._wave_active:
-            # Start wave if interval elapsed OR if we just finished entry animation
-            if time_since_last_wave >= self.config.arm_wave_interval or (just_finished_entry and time_since_last_wave > 1.0):
-                self._start_wave()
+        # Start new wave if not currently waving and enough time has passed
+        if not self._wave_active and time_since_last_wave >= self.config.arm_wave_interval:
+            self._start_wave()
 
+        # Update wave animation if active
         if self._wave_active:
             arm_pos = self._update_wave()
 
@@ -758,6 +776,12 @@ class StateMachine:
 
         # Calculate velocity
         velocity = -error * 180.0 * self.config.tracking_velocity_gain
+
+        # Apply minimum velocity (ensure servo actually moves when outside deadzone)
+        if velocity > 0 and velocity < self.config.tracking_min_velocity:
+            velocity = self.config.tracking_min_velocity
+        elif velocity < 0 and velocity > -self.config.tracking_min_velocity:
+            velocity = -self.config.tracking_min_velocity
 
         # Clamp velocity to prevent overshoot
         velocity = max(-self.config.tracking_max_velocity,

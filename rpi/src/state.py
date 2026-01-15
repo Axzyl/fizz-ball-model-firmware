@@ -48,6 +48,8 @@ class FaceState:
     processed_frame: Optional[np.ndarray] = None
     # Dark frame detection (door closed)
     is_dark: bool = False  # True when frame brightness is below threshold
+    frame_brightness: float = 0.0  # Current frame brightness (for tuning threshold)
+    frame_variance: float = 0.0  # Current frame std deviation (for tuning variance threshold)
     # Camera connection status
     camera_connected: bool = False  # True when camera is working properly
 
@@ -227,6 +229,8 @@ class AppState:
         frame_height: int = 480,
         processed_frame: Optional[np.ndarray] = None,
         is_dark: bool = False,
+        frame_brightness: float = 0.0,
+        frame_variance: float = 0.0,
         camera_connected: bool = True,
     ) -> None:
         """Thread-safe face state update."""
@@ -244,6 +248,8 @@ class AppState:
             self._face.frame_width = frame_width
             self._face.frame_height = frame_height
             self._face.is_dark = is_dark
+            self._face.frame_brightness = frame_brightness
+            self._face.frame_variance = frame_variance
             self._face.camera_connected = camera_connected
             self._face.timestamp = time.time()
             # Store the frame this detection was made on (for synchronized display)
@@ -270,6 +276,8 @@ class AppState:
                 frame_width=self._face.frame_width,
                 frame_height=self._face.frame_height,
                 is_dark=self._face.is_dark,
+                frame_brightness=self._face.frame_brightness,
+                frame_variance=self._face.frame_variance,
                 camera_connected=self._face.camera_connected,
             )
 
@@ -536,6 +544,8 @@ class AppState:
                 num_faces=self._face.num_faces,
                 num_facing=self._face.num_facing,
                 is_dark=self._face.is_dark,
+                frame_brightness=self._face.frame_brightness,
+                frame_variance=self._face.frame_variance,
                 camera_connected=self._face.camera_connected,
             )
 

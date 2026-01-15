@@ -38,9 +38,12 @@ class VisionThread(threading.Thread):
     - Frame and detection results are always matched
     """
 
-    # Dark frame threshold - frames below this mean brightness are considered "dark"
-    # (door closed). CV is skipped to save CPU.
-    DARK_THRESHOLD = 15  # 0-255 scale
+    # Dark frame detection settings - loaded from config
+    # Uses percentile-based detection to be robust to internal LED light spots
+    DARK_THRESHOLD = getattr(config, 'DARK_THRESHOLD', 25)
+    DARK_PERCENTILE = getattr(config, 'DARK_PERCENTILE', 75)
+    DARK_USE_VARIANCE = getattr(config, 'DARK_USE_VARIANCE', False)
+    DARK_VARIANCE_THRESHOLD = getattr(config, 'DARK_VARIANCE_THRESHOLD', 20)
 
     # Camera connection tracking - use config value or default
     MAX_CONSECUTIVE_FAILURES = getattr(config, 'CAMERA_MAX_FAILURES', 30)
@@ -121,8 +124,27 @@ class VisionThread(threading.Thread):
             frame_h, frame_w = frame.shape[:2]
 
             # Check if frame is too dark (door closed) - skip CV to save CPU
-            frame_brightness = frame.mean()
-            is_dark = frame_brightness < self.DARK_THRESHOLD
+            # Use percentile-based detection to be robust to small bright LED spots
+            # Convert to grayscale for brightness calculation
+            if len(frame.shape) == 3:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            else:
+                gray = frame
+
+            # Use percentile instead of mean - more robust to LED hotspots
+            # e.g., 75th percentile means 75% of pixels must be below threshold
+            frame_brightness = np.percentile(gray, self.DARK_PERCENTILE)
+            frame_variance = gray.std()  # Standard deviation for uniformity check
+
+            # Determine if dark based on brightness
+            is_bright_dark = frame_brightness < self.DARK_THRESHOLD
+
+            # Optionally also check variance (uniform colors = door closed)
+            if self.DARK_USE_VARIANCE:
+                is_var_low = frame_variance < self.DARK_VARIANCE_THRESHOLD
+                is_dark = is_bright_dark and is_var_low
+            else:
+                is_dark = is_bright_dark
 
             if is_dark:
                 # Skip CV processing, just report dark frame
@@ -132,6 +154,8 @@ class VisionThread(threading.Thread):
                     frame_height=frame_h,
                     processed_frame=frame,
                     is_dark=True,
+                    frame_brightness=frame_brightness,
+                    frame_variance=frame_variance,
                     camera_connected=True,
                 )
             else:
@@ -162,6 +186,8 @@ class VisionThread(threading.Thread):
                         frame_height=frame_h,
                         processed_frame=frame,
                         is_dark=False,
+                        frame_brightness=frame_brightness,
+                        frame_variance=frame_variance,
                         camera_connected=True,
                     )
                 else:
@@ -171,6 +197,8 @@ class VisionThread(threading.Thread):
                         frame_height=frame_h,
                         processed_frame=frame,
                         is_dark=False,
+                        frame_brightness=frame_brightness,
+                        frame_variance=frame_variance,
                         camera_connected=True,
                     )
 

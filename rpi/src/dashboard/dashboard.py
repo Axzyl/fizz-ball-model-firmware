@@ -128,6 +128,54 @@ class Dashboard:
                 new_mode = (current + 1) % 3
                 self.state.set_command(light_command=new_mode)
                 logger.info(f"Light mode changed to {['OFF', 'ON', 'AUTO'][new_mode]}")
+            # Valve controls
+            elif key == ord("v"):  # Open valve
+                if self.state_machine:
+                    self.state_machine.open_valve()
+                    logger.info("Valve opened (manual override)")
+            elif key == ord("c"):  # Close valve
+                if self.state_machine:
+                    self.state_machine.close_valve()
+                    logger.info("Valve closed (manual override cleared)")
+            # State machine controls
+            elif key == ord("e"):  # Emergency stop
+                if self.state_machine:
+                    self.state_machine.emergency_stop()
+                    self.state.set_command(valve_open=False)
+                    logger.warning("EMERGENCY STOP triggered")
+            elif key == ord("d"):  # Enable dispensing
+                if self.state_machine:
+                    self.state_machine.enable_dispensing()
+                    logger.info("Dispensing re-enabled")
+            elif key == ord("i"):  # Force inactive
+                if self.state_machine:
+                    self.state_machine.force_inactive()
+                    logger.info("Force inactive triggered")
+            elif key == ord("f"):  # Force collapse
+                if self.state_machine:
+                    self.state_machine.force_collapse()
+                    logger.info("Force collapse triggered")
+            elif key == ord("s"):  # Skip animation
+                if self.state_machine:
+                    self.state_machine.skip_animation()
+                    logger.info("Skip animation triggered")
+            # Outcome controls
+            elif key == ord("1"):  # Random outcome
+                if self.state_machine:
+                    self.state_machine.set_forced_outcome(None)
+                    logger.info("Next outcome: RANDOM")
+            elif key == ord("2"):  # Force alive
+                if self.state_machine:
+                    self.state_machine.set_forced_outcome("ALIVE")
+                    logger.info("Next outcome: FORCE ALIVE")
+            elif key == ord("3"):  # Force dead
+                if self.state_machine:
+                    self.state_machine.set_forced_outcome("DEAD")
+                    logger.info("Next outcome: FORCE DEAD")
+            # Test
+            elif key == ord("t"):  # LED test
+                self.state.trigger_led_test()
+                logger.info("LED test triggered")
 
             # Check if window was closed
             if cv2.getWindowProperty(self.WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
@@ -201,12 +249,22 @@ class Dashboard:
             1,
         )
 
-        # Draw keyboard shortcuts help
-        help_text = "Q:Quit | R:Reset | L:Light | Scroll to see more"
+        # Draw keyboard shortcuts help (two lines)
+        help_line1 = "Q:Quit E:Stop D:Enable V:Valve C:Close I:Inactive F:Collapse S:Skip"
+        help_line2 = "1:Random 2:Alive 3:Dead T:Test R:Reset L:Light"
         cv2.putText(
             dashboard,
-            help_text,
-            (config.VIDEO_PANEL_WIDTH + 10, config.DASHBOARD_HEIGHT - 10),
+            help_line1,
+            (config.VIDEO_PANEL_WIDTH + 10, config.DASHBOARD_HEIGHT - 22),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.32,
+            (100, 100, 100),
+            1,
+        )
+        cv2.putText(
+            dashboard,
+            help_line2,
+            (config.VIDEO_PANEL_WIDTH + 10, config.DASHBOARD_HEIGHT - 8),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.32,
             (100, 100, 100),
