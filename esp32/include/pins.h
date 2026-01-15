@@ -15,9 +15,9 @@
 
 // NOTE: GPIO 6-11 are used by internal flash on ESP32-WROOM-32 - avoid them!
 // Safe GPIOs: 2, 4, 5, 12-19, 21-23, 25-27, 32-33
-#define SERVO_1_PIN 2  // Servo 1 PWM output
-#define SERVO_2_PIN 15 // Servo 2 PWM output
-#define SERVO_3_PIN 13 // Servo 3 PWM output
+#define SERVO_1_PIN 2  // Servo 1 PWM output (Base)
+#define SERVO_2_PIN 15 // Servo 2 PWM output (Arm)
+#define SERVO_3_PIN 13 // Servo 3 PWM output (Valve) - moved from 13 to free it for NeoPixel
 
 // -----------------------------------------------------------------------------
 // Limit Switch
@@ -44,22 +44,34 @@
 #define MATRIX_CS_PIN 26     // CS (Chip Select / Load)
 #define MATRIX_NUM_DEVICES 2 // Number of 8x8 matrices chained
 
+// -----------------------------------------------------------------------------
+// NeoPixel 5x5 Matrix (One eye)
+// -----------------------------------------------------------------------------
+#define NPM_DATA_PIN 22 // Data pin for NeoPixel 5x5 matrix (matches sample)
+
+// -----------------------------------------------------------------------------
+// NeoPixel Ring (Other eye - camera surround)
+// -----------------------------------------------------------------------------
+#define NPR_DATA_PIN 21 // Data pin for NeoPixel ring
+
 // =============================================================================
 // Pin Usage Summary
 // =============================================================================
 //
 //  GPIO  | Function           | Direction | Notes
 // -------|--------------------|-----------|---------------------------------
-//    4   | Servo 1 PWM        | Output    | 50Hz PWM signal
-//    5   | Servo 3 PWM        | Output    | 50Hz PWM signal
-//    7   | Servo 2 PWM        | Output    | 50Hz PWM signal
+//    2   | Servo 1 (Base)     | Output    | 50Hz PWM signal
+//    4   | Servo 3 (Valve)    | Output    | 50Hz PWM signal
 //    9   | Test LED           | Output    | Status indicator
 //   12   | RGB Blue           | Output    | PWM (5kHz)
+//   13   | NeoPixel Matrix    | Output    | 5x5 RGB matrix data
 //   14   | RGB Green          | Output    | PWM (5kHz)
-//   25   | Matrix Data (DIN)  | Output    | SPI MOSI
-//   26   | Matrix CS (Load)   | Output    | SPI chip select
+//   15   | Servo 2 (Arm)      | Output    | 50Hz PWM signal
+//   16   | NeoPixel Ring      | Output    | 8-LED ring data
+//   25   | Matrix Data (DIN)  | Output    | MAX7219 SPI MOSI
+//   26   | Matrix CS (Load)   | Output    | MAX7219 SPI chip select
 //   27   | RGB Red            | Output    | PWM (5kHz)
-//   32   | Matrix Clock       | Output    | SPI SCK
+//   32   | Matrix Clock       | Output    | MAX7219 SPI SCK
 //   33   | Limit Switch       | Input     | Internal pullup, active LOW
 //
 // IMPORTANT: Avoid GPIO 6-11 on ESP32-WROOM-32 (used by internal flash)

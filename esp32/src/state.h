@@ -29,11 +29,34 @@ typedef struct {
     float target_servo_angles[NUM_SERVOS];  // Desired servo positions (degrees)
     uint8_t light_command;      // LIGHT_CMD_OFF, LIGHT_CMD_ON, or LIGHT_CMD_AUTO
     uint8_t flags;              // Reserved flags
+
+    // RGB strip
+    uint8_t rgb_mode;           // 0=solid, 1=rainbow
     uint8_t rgb_r;              // RGB red value (0-255)
     uint8_t rgb_g;              // RGB green value (0-255)
     uint8_t rgb_b;              // RGB blue value (0-255)
+
+    // MAX7219 matrix
     uint8_t matrix_left;        // Left matrix pattern ID
     uint8_t matrix_right;       // Right matrix pattern ID
+
+    // NeoPixel 5x5 matrix
+    uint8_t npm_mode;           // NPM_MODE_* (0=off, 1=letter, etc.)
+    char npm_letter;            // Letter to display (A-Z)
+    uint8_t npm_r;              // Red value (0-255)
+    uint8_t npm_g;              // Green value (0-255)
+    uint8_t npm_b;              // Blue value (0-255)
+
+    // NeoPixel ring
+    uint8_t npr_mode;           // NPR_MODE_* (0=off, 1=solid, etc.)
+    uint8_t npr_r;              // Red value (0-255)
+    uint8_t npr_g;              // Green value (0-255)
+    uint8_t npr_b;              // Blue value (0-255)
+
+    // Valve control
+    bool valve_open;            // True to open valve
+    bool valve_enabled;         // False = emergency stop active
+
     uint32_t last_command_time; // Timestamp of last received command
     bool connected;             // True if receiving commands
 } CommandState;

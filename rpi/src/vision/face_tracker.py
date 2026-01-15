@@ -28,8 +28,12 @@ logger = logging.getLogger(__name__)
 # Model URLs and paths
 FACE_LANDMARKER_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
 FACE_LANDMARKER_MODEL = "face_landmarker.task"
-YOLO_FACE_URL = "https://github.com/lindevs/yolov8-face/releases/latest/download/yolov8n-face-lindevs.pt"
-YOLO_FACE_MODEL = "yolov8n-face-lindevs.pt"
+
+# YOLO face models (larger = better distance detection, slower)
+# Available: yolov8n (6MB), yolov8s (22MB), yolov8m (50MB), yolov8l (83MB)
+YOLO_MODEL_SIZE = getattr(config, 'YOLO_MODEL_SIZE', 's')  # Default to 'small' for better distance
+YOLO_FACE_URL = f"https://github.com/lindevs/yolov8-face/releases/latest/download/yolov8{YOLO_MODEL_SIZE}-face-lindevs.pt"
+YOLO_FACE_MODEL = f"yolov8{YOLO_MODEL_SIZE}-face-lindevs.pt"
 
 
 def get_models_dir() -> str:
@@ -53,13 +57,21 @@ def download_model_if_needed(url: str, filename: str) -> str:
     model_path = os.path.join(get_models_dir(), filename)
 
     if not os.path.exists(model_path):
+        print(f"[YOLO] Model not found locally, downloading {filename}...")
+        print(f"[YOLO] URL: {url}")
         logger.info(f"Downloading model: {filename}...")
         try:
             urllib.request.urlretrieve(url, model_path)
+            file_size = os.path.getsize(model_path) / (1024 * 1024)
+            print(f"[YOLO] Downloaded successfully ({file_size:.1f} MB)")
             logger.info(f"Model downloaded to: {model_path}")
         except Exception as e:
+            print(f"[YOLO] Download failed: {e}")
             logger.error(f"Failed to download model: {e}")
             raise
+    else:
+        file_size = os.path.getsize(model_path) / (1024 * 1024)
+        print(f"[YOLO] Using cached model ({file_size:.1f} MB)")
 
     return model_path
 
@@ -72,19 +84,24 @@ class YOLOFaceDetector:
 
     def __init__(self):
         """Initialize the YOLO face detector."""
-        logger.info("Initializing YOLO face detector...")
+        print(f"[YOLO] Initializing with model size '{YOLO_MODEL_SIZE}' ({YOLO_FACE_MODEL})")
+        logger.info(f"Initializing YOLO face detector (model: {YOLO_FACE_MODEL})...")
 
         try:
             from ultralytics import YOLO
             model_path = download_model_if_needed(YOLO_FACE_URL, YOLO_FACE_MODEL)
+            print(f"[YOLO] Loading model from: {model_path}")
             self.model = YOLO(model_path)
             self.available = True
-            logger.info("YOLO face detector initialized")
+            print(f"[YOLO] Model loaded successfully")
+            logger.info(f"YOLO face detector initialized: {YOLO_FACE_MODEL}")
         except ImportError:
+            print("[YOLO] ERROR: ultralytics not installed")
             logger.warning("ultralytics not installed - YOLO detector unavailable")
             self.model = None
             self.available = False
         except Exception as e:
+            print(f"[YOLO] ERROR: {e}")
             logger.warning(f"Failed to initialize YOLO detector: {e}")
             self.model = None
             self.available = False
@@ -425,61 +442,88 @@ class FaceTracker:
             if not detections:
                 return result
 
-            # Get the largest/most confident face
-            best_detection = max(detections, key=lambda d: d['confidence'])
-            x, y, w, h = best_detection['bbox']
-            confidence = best_detection['confidence']
+            # Process all faces to get pose information
+            processed_faces = []
+            frame_center_x = frame_width / 2
 
-            # Crop face with padding for pose estimation
-            padding = 0.2
-            pad_x = int(w * padding)
-            pad_y = int(h * padding)
+            for detection in detections:
+                x, y, w, h = detection['bbox']
+                confidence = detection['confidence']
 
-            x1 = max(0, x - pad_x)
-            y1 = max(0, y - pad_y)
-            x2 = min(frame_width, x + w + pad_x)
-            y2 = min(frame_height, y + h + pad_y)
+                # Crop face with padding for pose estimation
+                padding = 0.2
+                pad_x = int(w * padding)
+                pad_y = int(h * padding)
 
-            face_crop = frame[y1:y2, x1:x2]
+                x1 = max(0, x - pad_x)
+                y1 = max(0, y - pad_y)
+                x2 = min(frame_width, x + w + pad_x)
+                y2 = min(frame_height, y + h + pad_y)
 
-            # Estimate pose on cropped face
-            pose, landmarks = self.pose_estimator.estimate_pose(face_crop)
+                face_crop = frame[y1:y2, x1:x2]
 
-            # Adjust landmarks to frame coordinates
-            if landmarks is not None:
-                landmarks[:, 0] += x1
-                landmarks[:, 1] += y1
+                # Estimate pose on cropped face
+                pose, landmarks = self.pose_estimator.estimate_pose(face_crop)
 
-            if pose is not None:
-                yaw, pitch, roll = pose
-            else:
-                yaw, pitch, roll = 0.0, 0.0, 0.0
+                # Adjust landmarks to frame coordinates
+                if landmarks is not None:
+                    landmarks[:, 0] += x1
+                    landmarks[:, 1] += y1
 
-            # Create detection dict for validation
-            detection_data = {
-                'bbox': (x, y, w, h),
-                'pose': pose,
-            }
-            is_valid, invalid_reasons = self.validator.validate(detection_data, frame_width)
+                if pose is not None:
+                    yaw, pitch, roll = pose
+                else:
+                    yaw, pitch, roll = 0.0, 0.0, 0.0
 
-            # Determine if facing (using config thresholds)
-            is_facing = (
-                is_valid and
-                abs(pitch) < config.FACING_YAW_THRESHOLD and
-                abs(self.validator.normalize_roll(roll)) < config.FACING_PITCH_THRESHOLD
-            )
+                # Create detection dict for validation
+                detection_data = {
+                    'bbox': (x, y, w, h),
+                    'pose': pose,
+                }
+                is_valid, invalid_reasons = self.validator.validate(detection_data, frame_width)
 
+                # Determine if facing (using config thresholds)
+                is_facing = (
+                    is_valid and
+                    abs(pitch) < config.FACING_YAW_THRESHOLD and
+                    abs(self.validator.normalize_roll(roll)) < config.FACING_PITCH_THRESHOLD
+                )
+
+                # Calculate distance from center (face center x to frame center)
+                face_center_x = x + w / 2
+                distance_from_center = abs(face_center_x - frame_center_x)
+
+                processed_faces.append({
+                    'bbox': (x, y, w, h),
+                    'landmarks': landmarks,
+                    'yaw': yaw,
+                    'pitch': pitch,
+                    'roll': roll,
+                    'is_facing': is_facing,
+                    'confidence': confidence,
+                    'is_valid': is_valid,
+                    'invalid_reasons': invalid_reasons,
+                    'distance_from_center': distance_from_center,
+                })
+
+            # Select best face based on priority:
+            # 1. Facing camera (is_facing = True)
+            # 2. Closest to center
+            best_face = self._select_best_face(processed_faces)
+
+            x, y, w, h = best_face['bbox']
             result.update({
                 "detected": True,
                 "bbox": (x, y, w, h),
-                "landmarks": landmarks,
-                "yaw": yaw,
-                "pitch": pitch,
-                "roll": roll,
-                "is_facing": is_facing,
-                "confidence": confidence,
-                "valid": is_valid,
-                "invalid_reasons": invalid_reasons,
+                "landmarks": best_face['landmarks'],
+                "yaw": best_face['yaw'],
+                "pitch": best_face['pitch'],
+                "roll": best_face['roll'],
+                "is_facing": best_face['is_facing'],
+                "confidence": best_face['confidence'],
+                "valid": best_face['is_valid'],
+                "invalid_reasons": best_face['invalid_reasons'],
+                "all_faces": processed_faces,  # Include all faces for debugging
             })
 
         else:
@@ -487,6 +531,40 @@ class FaceTracker:
             result = self._process_mediapipe_fallback(frame)
 
         return result
+
+    def _select_best_face(self, faces: list[dict]) -> dict:
+        """
+        Select the best face based on priority:
+        1. Facing camera (is_facing = True)
+        2. Closest to center of frame
+
+        Args:
+            faces: List of processed face dictionaries
+
+        Returns:
+            Best face dictionary
+        """
+        if not faces:
+            return None
+
+        if len(faces) == 1:
+            return faces[0]
+
+        # Separate faces into facing and not facing
+        facing_faces = [f for f in faces if f['is_facing']]
+        not_facing_faces = [f for f in faces if not f['is_facing']]
+
+        # Priority 1: If any faces are facing, pick from those
+        if facing_faces:
+            # Priority 2: Among facing faces, pick closest to center
+            best = min(facing_faces, key=lambda f: f['distance_from_center'])
+            logger.debug(f"Selected facing face closest to center (dist={best['distance_from_center']:.1f})")
+            return best
+
+        # No facing faces, pick closest to center from all
+        best = min(not_facing_faces, key=lambda f: f['distance_from_center'])
+        logger.debug(f"No facing faces, selected closest to center (dist={best['distance_from_center']:.1f})")
+        return best
 
     def _process_mediapipe_fallback(self, frame: np.ndarray) -> dict:
         """Process using MediaPipe only (fallback when YOLO unavailable)."""

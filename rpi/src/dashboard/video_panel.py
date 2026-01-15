@@ -35,6 +35,9 @@ class VideoPanel:
         """
         self.width = width
         self.height = height
+        # Track actual source frame dimensions for correct scaling
+        self._source_width = config.CAMERA_WIDTH
+        self._source_height = config.CAMERA_HEIGHT
 
     def render(
         self,
@@ -66,6 +69,10 @@ class VideoPanel:
             )
             return panel
 
+        # Get ACTUAL frame dimensions (this is critical for correct bbox scaling)
+        # The camera may return a different resolution than config.CAMERA_WIDTH/HEIGHT
+        self._source_height, self._source_width = frame.shape[:2]
+
         # Resize frame to fit panel
         panel = cv2.resize(frame, (self.width, self.height))
 
@@ -86,9 +93,10 @@ class VideoPanel:
         if face.bbox is None:
             return
 
-        # Scale bbox to panel size
-        frame_scale_x = self.width / config.CAMERA_WIDTH
-        frame_scale_y = self.height / config.CAMERA_HEIGHT
+        # Scale bbox from source frame coordinates to panel coordinates
+        # IMPORTANT: Use actual source frame dimensions, not config values!
+        frame_scale_x = self.width / self._source_width
+        frame_scale_y = self.height / self._source_height
 
         x, y, w, h = face.bbox
         x = int(x * frame_scale_x)
@@ -106,9 +114,9 @@ class VideoPanel:
         if face.landmarks is None:
             return
 
-        # Scale landmarks to panel size
-        frame_scale_x = self.width / config.CAMERA_WIDTH
-        frame_scale_y = self.height / config.CAMERA_HEIGHT
+        # Scale landmarks from source frame coordinates to panel coordinates
+        frame_scale_x = self.width / self._source_width
+        frame_scale_y = self.height / self._source_height
 
         # Draw subset of landmarks for performance
         # Draw every 5th landmark
@@ -122,9 +130,9 @@ class VideoPanel:
         if face.landmarks is None:
             return
 
-        # Scale to panel size
-        frame_scale_x = self.width / config.CAMERA_WIDTH
-        frame_scale_y = self.height / config.CAMERA_HEIGHT
+        # Scale from source frame coordinates to panel coordinates
+        frame_scale_x = self.width / self._source_width
+        frame_scale_y = self.height / self._source_height
 
         # Get nose tip (landmark index 1)
         nose = face.landmarks[1]

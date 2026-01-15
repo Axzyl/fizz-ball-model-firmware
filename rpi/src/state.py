@@ -38,6 +38,14 @@ class FaceState:
     is_facing: bool = False
     confidence: float = 0.0
     timestamp: float = 0.0
+    # Multi-face tracking
+    num_faces: int = 0  # Total faces detected
+    num_facing: int = 0  # Number of faces looking at camera
+    # Actual frame dimensions (for correct tracking calculations)
+    frame_width: int = 640
+    frame_height: int = 480
+    # The actual frame this detection was made on (for synchronized display)
+    processed_frame: Optional[np.ndarray] = None
 
     def clear(self) -> None:
         """Clear face detection results."""
@@ -49,6 +57,9 @@ class FaceState:
         self.roll = 0.0
         self.is_facing = False
         self.confidence = 0.0
+        self.num_faces = 0
+        self.num_facing = 0
+        # Note: processed_frame and frame dimensions are NOT cleared
 
 
 @dataclass
@@ -62,6 +73,9 @@ class EspState:
     light_state: bool = False
     flags: int = 0
     test_active: bool = False  # True when test was triggered on ESP32
+    valve_open: bool = False  # True when valve is currently open
+    valve_enabled: bool = True  # False when emergency stop active
+    valve_ms: int = 0  # How long valve has been open (ms)
     last_rx_time: float = 0.0
 
     def update_from_packet(
@@ -71,6 +85,9 @@ class EspState:
         light_state: int,
         flags: int,
         test_active: int = 0,
+        valve_open: int = 0,
+        valve_enabled: int = 1,
+        valve_ms: int = 0,
     ) -> None:
         """Update state from received packet."""
         self.connected = True
@@ -80,6 +97,9 @@ class EspState:
         self.light_state = light_state == 1
         self.flags = flags
         self.test_active = test_active == 1
+        self.valve_open = valve_open == 1
+        self.valve_enabled = valve_enabled == 1
+        self.valve_ms = valve_ms
         self.last_rx_time = time.time()
 
     def check_connection(self, timeout_ms: float) -> None:
@@ -95,11 +115,28 @@ class CommandState:
     servo_targets: tuple[float, float, float] = (90.0, 90.0, 90.0)  # 3 servos
     light_command: int = 2  # Default to AUTO
     flags: int = 0
+    # RGB strip
+    rgb_mode: int = 0  # 0=solid, 1=rainbow
     rgb_r: int = 0
     rgb_g: int = 0
     rgb_b: int = 0
+    # MAX7219 matrix
     matrix_left: int = 1   # Left matrix pattern (0=off, 1=circle, 2=X)
     matrix_right: int = 2  # Right matrix pattern (0=off, 1=circle, 2=X)
+    # NeoPixel 5x5 matrix
+    npm_mode: int = 0  # NPM_MODE_* constants from protocol.py
+    npm_letter: str = "A"
+    npm_r: int = 255
+    npm_g: int = 255
+    npm_b: int = 255
+    # NeoPixel ring
+    npr_mode: int = 0  # NPR_MODE_* constants from protocol.py
+    npr_r: int = 255
+    npr_g: int = 255
+    npr_b: int = 255
+    # Valve control
+    valve_open: bool = False
+    estop_enable: bool = True  # False = emergency stop active
 
 
 @dataclass
@@ -181,6 +218,11 @@ class AppState:
         roll: float = 0.0,
         is_facing: bool = False,
         confidence: float = 0.0,
+        num_faces: int = 0,
+        num_facing: int = 0,
+        frame_width: int = 640,
+        frame_height: int = 480,
+        processed_frame: Optional[np.ndarray] = None,
     ) -> None:
         """Thread-safe face state update."""
         with self._lock:
@@ -192,7 +234,14 @@ class AppState:
             self._face.roll = roll
             self._face.is_facing = is_facing
             self._face.confidence = confidence
+            self._face.num_faces = num_faces
+            self._face.num_facing = num_facing
+            self._face.frame_width = frame_width
+            self._face.frame_height = frame_height
             self._face.timestamp = time.time()
+            # Store the frame this detection was made on (for synchronized display)
+            if processed_frame is not None:
+                self._face.processed_frame = processed_frame.copy()
 
     def get_face(self) -> FaceState:
         """Thread-safe face state retrieval (returns copy)."""
@@ -209,6 +258,10 @@ class AppState:
                 is_facing=self._face.is_facing,
                 confidence=self._face.confidence,
                 timestamp=self._face.timestamp,
+                num_faces=self._face.num_faces,
+                num_facing=self._face.num_facing,
+                frame_width=self._face.frame_width,
+                frame_height=self._face.frame_height,
             )
 
     def clear_face(self) -> None:
@@ -227,10 +280,16 @@ class AppState:
         light_state: int,
         flags: int,
         test_active: int = 0,
+        valve_open: int = 0,
+        valve_enabled: int = 1,
+        valve_ms: int = 0,
     ) -> None:
         """Thread-safe ESP state update from received packet."""
         with self._lock:
-            self._esp.update_from_packet(limit, servo_positions, light_state, flags, test_active)
+            self._esp.update_from_packet(
+                limit, servo_positions, light_state, flags,
+                test_active, valve_open, valve_enabled, valve_ms
+            )
 
     def get_esp(self) -> EspState:
         """Thread-safe ESP state retrieval (returns copy)."""
@@ -243,6 +302,9 @@ class AppState:
                 light_state=self._esp.light_state,
                 flags=self._esp.flags,
                 test_active=self._esp.test_active,
+                valve_open=self._esp.valve_open,
+                valve_enabled=self._esp.valve_enabled,
+                valve_ms=self._esp.valve_ms,
                 last_rx_time=self._esp.last_rx_time,
             )
 
@@ -263,11 +325,23 @@ class AppState:
         servo_target_3: Optional[float] = None,
         light_command: Optional[int] = None,
         flags: Optional[int] = None,
+        rgb_mode: Optional[int] = None,
         rgb_r: Optional[int] = None,
         rgb_g: Optional[int] = None,
         rgb_b: Optional[int] = None,
         matrix_left: Optional[int] = None,
         matrix_right: Optional[int] = None,
+        npm_mode: Optional[int] = None,
+        npm_letter: Optional[str] = None,
+        npm_r: Optional[int] = None,
+        npm_g: Optional[int] = None,
+        npm_b: Optional[int] = None,
+        npr_mode: Optional[int] = None,
+        npr_r: Optional[int] = None,
+        npr_g: Optional[int] = None,
+        npr_b: Optional[int] = None,
+        valve_open: Optional[bool] = None,
+        estop_enable: Optional[bool] = None,
     ) -> None:
         """Thread-safe command update."""
         with self._lock:
@@ -287,6 +361,8 @@ class AppState:
                 self._command.light_command = light_command
             if flags is not None:
                 self._command.flags = flags
+            if rgb_mode is not None:
+                self._command.rgb_mode = rgb_mode
             if rgb_r is not None:
                 self._command.rgb_r = rgb_r
             if rgb_g is not None:
@@ -297,6 +373,28 @@ class AppState:
                 self._command.matrix_left = matrix_left
             if matrix_right is not None:
                 self._command.matrix_right = matrix_right
+            if npm_mode is not None:
+                self._command.npm_mode = npm_mode
+            if npm_letter is not None:
+                self._command.npm_letter = npm_letter
+            if npm_r is not None:
+                self._command.npm_r = npm_r
+            if npm_g is not None:
+                self._command.npm_g = npm_g
+            if npm_b is not None:
+                self._command.npm_b = npm_b
+            if npr_mode is not None:
+                self._command.npr_mode = npr_mode
+            if npr_r is not None:
+                self._command.npr_r = npr_r
+            if npr_g is not None:
+                self._command.npr_g = npr_g
+            if npr_b is not None:
+                self._command.npr_b = npr_b
+            if valve_open is not None:
+                self._command.valve_open = valve_open
+            if estop_enable is not None:
+                self._command.estop_enable = estop_enable
 
     def get_command(self) -> CommandState:
         """Thread-safe command retrieval (returns copy)."""
@@ -305,11 +403,23 @@ class AppState:
                 servo_targets=self._command.servo_targets,
                 light_command=self._command.light_command,
                 flags=self._command.flags,
+                rgb_mode=self._command.rgb_mode,
                 rgb_r=self._command.rgb_r,
                 rgb_g=self._command.rgb_g,
                 rgb_b=self._command.rgb_b,
                 matrix_left=self._command.matrix_left,
                 matrix_right=self._command.matrix_right,
+                npm_mode=self._command.npm_mode,
+                npm_letter=self._command.npm_letter,
+                npm_r=self._command.npm_r,
+                npm_g=self._command.npm_g,
+                npm_b=self._command.npm_b,
+                npr_mode=self._command.npr_mode,
+                npr_r=self._command.npr_r,
+                npr_g=self._command.npr_g,
+                npr_b=self._command.npr_b,
+                valve_open=self._command.valve_open,
+                estop_enable=self._command.estop_enable,
             )
 
     def set_command_flag(self, flag: int) -> None:
@@ -387,13 +497,19 @@ class AppState:
         Thread-safe retrieval of all state for dashboard rendering.
 
         Returns tuple of (frame, face, esp, command, system).
+
+        IMPORTANT: Returns the processed_frame (the frame face detection ran on)
+        if available, to ensure frame and face detection are synchronized.
+        Falls back to raw_frame if no processed frame exists yet.
         """
         with self._lock:
-            frame = (
-                self._frame.raw_frame.copy()
-                if self._frame.raw_frame is not None
-                else None
-            )
+            # Prefer processed_frame (synchronized with face detection) over raw_frame
+            if self._face.processed_frame is not None:
+                frame = self._face.processed_frame.copy()
+            elif self._frame.raw_frame is not None:
+                frame = self._frame.raw_frame.copy()
+            else:
+                frame = None
 
             face = FaceState(
                 detected=self._face.detected,
@@ -407,6 +523,8 @@ class AppState:
                 is_facing=self._face.is_facing,
                 confidence=self._face.confidence,
                 timestamp=self._face.timestamp,
+                num_faces=self._face.num_faces,
+                num_facing=self._face.num_facing,
             )
 
             esp = EspState(
@@ -417,6 +535,9 @@ class AppState:
                 light_state=self._esp.light_state,
                 flags=self._esp.flags,
                 test_active=self._esp.test_active,
+                valve_open=self._esp.valve_open,
+                valve_enabled=self._esp.valve_enabled,
+                valve_ms=self._esp.valve_ms,
                 last_rx_time=self._esp.last_rx_time,
             )
 
@@ -424,11 +545,23 @@ class AppState:
                 servo_targets=self._command.servo_targets,
                 light_command=self._command.light_command,
                 flags=self._command.flags,
+                rgb_mode=self._command.rgb_mode,
                 rgb_r=self._command.rgb_r,
                 rgb_g=self._command.rgb_g,
                 rgb_b=self._command.rgb_b,
                 matrix_left=self._command.matrix_left,
                 matrix_right=self._command.matrix_right,
+                npm_mode=self._command.npm_mode,
+                npm_letter=self._command.npm_letter,
+                npm_r=self._command.npm_r,
+                npm_g=self._command.npm_g,
+                npm_b=self._command.npm_b,
+                npr_mode=self._command.npr_mode,
+                npr_r=self._command.npr_r,
+                npr_g=self._command.npr_g,
+                npr_b=self._command.npr_b,
+                valve_open=self._command.valve_open,
+                estop_enable=self._command.estop_enable,
             )
 
             self._system.update_uptime()

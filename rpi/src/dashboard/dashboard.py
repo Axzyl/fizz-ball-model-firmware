@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -13,6 +14,7 @@ import sys
 sys.path.append("..")
 import config
 from state import AppState
+from state_machine import StateMachine
 from .video_panel import VideoPanel
 from .telemetry_panel import TelemetryPanel
 
@@ -29,16 +31,23 @@ class Dashboard:
 
     WINDOW_NAME = "Face Tracker Dashboard"
 
-    def __init__(self, state: AppState, stop_event: threading.Event) -> None:
+    def __init__(
+        self,
+        state: AppState,
+        stop_event: threading.Event,
+        state_machine: Optional[StateMachine] = None,
+    ) -> None:
         """
         Initialize dashboard.
 
         Args:
             state: Application state to read for display
             stop_event: Event to signal shutdown
+            state_machine: State machine instance for control and display
         """
         self.state = state
         self.stop_event = stop_event
+        self.state_machine = state_machine
 
         # Calculate panel sizes
         self.telemetry_width = config.DASHBOARD_WIDTH - config.VIDEO_PANEL_WIDTH
@@ -52,6 +61,7 @@ class Dashboard:
         self.telemetry_panel = TelemetryPanel(
             self.telemetry_width,
             self.telemetry_height,
+            state_machine=state_machine,
         )
 
         # FPS tracking
@@ -110,9 +120,9 @@ class Dashboard:
                 logger.info("User requested exit")
                 self.stop_event.set()
                 break
-            elif key == ord("r"):  # Reset servos 2 & 3 to center (servo 1 controlled by limit switch)
-                self.state.set_command(servo_target_2=90.0, servo_target_3=90.0)
-                logger.info("Servos 2 & 3 reset to center")
+            elif key == ord("r"):  # Reset all servos to center
+                self.state.set_command(servo_target_1=90.0, servo_target_2=90.0, servo_target_3=90.0)
+                logger.info("All servos reset to center")
             elif key == ord("l"):  # Toggle light mode
                 current = self.state.get_command().light_command
                 new_mode = (current + 1) % 3
@@ -303,3 +313,34 @@ class Dashboard:
         elif button_name == "matrix_right_x":
             self.state.set_command(matrix_right=2)
             logger.info("Right matrix set to X")
+
+        # State machine controls
+        elif button_name == "emergency_stop" and self.state_machine:
+            self.state_machine.emergency_stop()
+            self.state.set_command(valve_open=False, estop_enable=False)
+            logger.warning("EMERGENCY STOP triggered")
+        elif button_name == "enable_dispensing" and self.state_machine:
+            self.state_machine.enable_dispensing()
+            self.state.set_command(estop_enable=True)
+            logger.info("Dispensing re-enabled")
+        elif button_name == "force_reset" and self.state_machine:
+            self.state_machine.force_reset()
+            logger.info("Force reset triggered")
+        elif button_name == "force_collapse" and self.state_machine:
+            self.state_machine.force_collapse()
+            logger.info("Force collapse triggered")
+        elif button_name == "skip_animation" and self.state_machine:
+            self.state_machine.skip_animation()
+            logger.info("Skip animation triggered")
+        elif button_name == "close_valve":
+            self.state.set_command(valve_open=False)
+            logger.info("Valve closed")
+        elif button_name == "outcome_random" and self.state_machine:
+            self.state_machine.set_forced_outcome(None)
+            logger.info("Next outcome: RANDOM")
+        elif button_name == "outcome_alive" and self.state_machine:
+            self.state_machine.set_forced_outcome("ALIVE")
+            logger.info("Next outcome: FORCE ALIVE")
+        elif button_name == "outcome_dead" and self.state_machine:
+            self.state_machine.set_forced_outcome("DEAD")
+            logger.info("Next outcome: FORCE DEAD")

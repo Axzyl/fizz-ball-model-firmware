@@ -6,13 +6,20 @@
 #include "rgb_strip.h"
 #include "led_matrix.h"
 #include "limit_switch.h"
+#include "valve_safety.h"
+#include "neopixel_matrix.h"
+#include "neopixel_ring.h"
 
 // Global state
 DeviceState g_state;
+ValveState g_valve_state;
+NpmState g_npm_state;
+NprState g_npr_state;
 
 // Timing
 uint32_t g_last_loop_time = 0;
 uint32_t g_last_status_time = 0;
+uint32_t g_last_animation_time = 0;
 uint32_t g_last_command_time = 0;
 bool g_has_received_command = false;
 
@@ -20,11 +27,17 @@ bool g_has_received_command = false;
 uint32_t g_test_triggered_time = 0;
 bool g_test_led_on = false;
 
+// Animation timing
+#define ANIMATION_INTERVAL_MS 20  // 50Hz animation update
+
 // Forward declarations
-void update_servos(DeviceState *state);
-void update_rgb(DeviceState *state);
-void update_matrix(DeviceState *state);
-void check_test_command(DeviceState *state);
+void update_servos(DeviceState* state);
+void update_rgb(DeviceState* state);
+void update_matrix(DeviceState* state);
+void update_valve(DeviceState* state);
+void update_neopixel_matrix(DeviceState* state);
+void update_neopixel_ring(DeviceState* state);
+void check_test_command(DeviceState* state);
 void update_test_led();
 
 void setup()
@@ -39,6 +52,9 @@ void setup()
 
     // Initialize state
     state_init(&g_state);
+    valve_safety_init(&g_valve_state);
+    npm_state_init(&g_npm_state);
+    npr_state_init(&g_npr_state);
 
     // Initialize components
     uart_init();
@@ -46,6 +62,10 @@ void setup()
     rgb_init();
     led_matrix_init();
     limit_switch_init();
+
+    // Initialize NeoPixel devices
+    npm_init(NPM_DATA_PIN);
+    npr_init(NPR_DATA_PIN);
 }
 
 void loop()
@@ -54,6 +74,16 @@ void loop()
 
     // Update test LED (non-blocking)
     update_test_led();
+
+    // Update animations at regular interval (50Hz)
+    if (now - g_last_animation_time >= ANIMATION_INTERVAL_MS)
+    {
+        g_last_animation_time = now;
+
+        // Update NeoPixel animations
+        npm_update(&g_npm_state);
+        npr_update(&g_npr_state);
+    }
 
     // Rate limit main loop
     if (now - g_last_loop_time < LOOP_PERIOD_MS)
@@ -81,9 +111,18 @@ void loop()
     // Update all servo positions
     update_servos(&g_state);
 
-    // Update RGB strip and LED matrix
+    // Update valve
+    update_valve(&g_state);
+
+    // Update RGB strip
     update_rgb(&g_state);
+
+    // Update MAX7219 LED matrix
     update_matrix(&g_state);
+
+    // Update NeoPixel matrix and ring modes (animations updated above)
+    update_neopixel_matrix(&g_state);
+    update_neopixel_ring(&g_state);
 
     // Send status if connected (received command within 1 second)
     bool connected = g_has_received_command && (now - g_last_command_time) < 1000;
@@ -94,10 +133,27 @@ void loop()
     }
 }
 
+// Called by uart_handler when a valid command is received
 void on_command_received()
 {
     g_last_command_time = millis();
     g_has_received_command = true;
+}
+
+// Functions called by uart_handler for valve state
+bool get_valve_open()
+{
+    return g_valve_state.actual_open;
+}
+
+bool get_valve_enabled()
+{
+    return g_valve_state.enabled;
+}
+
+uint32_t get_valve_open_ms()
+{
+    return valve_safety_get_open_ms(&g_valve_state);
 }
 
 bool is_test_active()
@@ -109,7 +165,7 @@ bool is_test_active()
     return (millis() - g_test_triggered_time) < 1000;
 }
 
-void check_test_command(DeviceState *state)
+void check_test_command(DeviceState* state)
 {
     if ((state->command.flags & CMD_FLAG_LED_TEST) && !g_test_led_on)
     {
@@ -136,25 +192,13 @@ void update_test_led()
     }
 }
 
-void update_servos(DeviceState *state)
+void update_servos(DeviceState* state)
 {
     // Update all servos
-    // Note: Servo 0 is controlled by Pi based on limit switch state,
-    // so we don't apply limit switch blocking here (Pi handles the logic)
     for (int i = 0; i < NUM_SERVOS; i++)
     {
         float target = state->command.target_servo_angles[i];
         float current = state->output.servo_angles[i];
-
-        // DEBUG: Blink LED when servo 0 target > 100 (limit switch pressed)
-        if (i == 0 && target > 100.0f)
-        {
-            digitalWrite(TEST_LED_PIN, HIGH);
-        }
-        else if (i == 0)
-        {
-            digitalWrite(TEST_LED_PIN, LOW);
-        }
 
         // Move servo toward target
         float new_angle = servo_move_toward(i, current, target, SERVO_SPEED);
@@ -164,12 +208,31 @@ void update_servos(DeviceState *state)
     }
 }
 
-void update_rgb(DeviceState *state)
+void update_valve(DeviceState* state)
 {
-    // Track previous RGB values to avoid unnecessary updates
+    // Update valve command from state
+    valve_safety_set_command(&g_valve_state, state->command.valve_open);
+    valve_safety_set_enabled(&g_valve_state, state->command.valve_enabled);
+
+    // Update valve safety (handles timeouts, connection loss, etc.)
+    bool valve_should_open = valve_safety_update(&g_valve_state, state->command.connected);
+
+    // TODO: Actually control valve servo/solenoid here
+    // For now, servo 1 (index 0) is the valve servo
+    // When valve should be open, move servo 1 to open position
+    // This would typically be done via a dedicated valve servo position
+    // state->command.target_servo_angles[0] = valve_should_open ? VALVE_OPEN_ANGLE : VALVE_CLOSED_ANGLE;
+}
+
+void update_rgb(DeviceState* state)
+{
+    // Track previous values to avoid unnecessary updates
+    static uint8_t prev_mode = 255;
     static uint8_t prev_r = 255, prev_g = 255, prev_b = 255;
     static uint8_t prev_light_cmd = 255;
+    static uint16_t rainbow_hue = 0;
 
+    uint8_t mode = state->command.rgb_mode;
     uint8_t r = state->command.rgb_r;
     uint8_t g = state->command.rgb_g;
     uint8_t b = state->command.rgb_b;
@@ -192,7 +255,7 @@ void update_rgb(DeviceState *state)
         break;
     }
 
-    // Apply RGB based on light command
+    // Apply RGB based on mode and light command
     if (!should_be_on)
     {
         // Light is off - turn off RGB
@@ -204,9 +267,34 @@ void update_rgb(DeviceState *state)
             prev_b = 0;
         }
     }
+    else if (mode == 1)
+    {
+        // Rainbow mode - cycle through colors
+        // Simple HSV to RGB conversion
+        uint8_t region = rainbow_hue / 43;
+        uint8_t remainder = (rainbow_hue - (region * 43)) * 6;
+
+        uint8_t q = 255 - remainder;
+        uint8_t t = remainder;
+
+        switch (region)
+        {
+        case 0:  r = 255; g = t;   b = 0;   break;
+        case 1:  r = q;   g = 255; b = 0;   break;
+        case 2:  r = 0;   g = 255; b = t;   break;
+        case 3:  r = 0;   g = q;   b = 255; break;
+        case 4:  r = t;   g = 0;   b = 255; break;
+        default: r = 255; g = 0;   b = q;   break;
+        }
+
+        rgb_set(r, g, b);
+        rainbow_hue = (rainbow_hue + 2) % 256;
+
+        prev_mode = mode;
+    }
     else
     {
-        // Light is on - use RGB values (default to white if all zeros)
+        // Solid color mode
         if (r == 0 && g == 0 && b == 0)
         {
             r = 255;
@@ -215,7 +303,7 @@ void update_rgb(DeviceState *state)
         }
 
         // Only update if values changed
-        if (r != prev_r || g != prev_g || b != prev_b)
+        if (r != prev_r || g != prev_g || b != prev_b || mode != prev_mode)
         {
             rgb_set(r, g, b);
             prev_r = r;
@@ -225,10 +313,11 @@ void update_rgb(DeviceState *state)
     }
 
     prev_light_cmd = state->command.light_command;
+    prev_mode = mode;
     state_update_light(state, should_be_on);
 }
 
-void update_matrix(DeviceState *state)
+void update_matrix(DeviceState* state)
 {
     // Track previous patterns to avoid unnecessary updates
     static uint8_t prev_left = 255;
@@ -244,4 +333,25 @@ void update_matrix(DeviceState *state)
         prev_left = left;
         prev_right = right;
     }
+}
+
+void update_neopixel_matrix(DeviceState* state)
+{
+    // Update NeoPixel matrix mode from command state
+    npm_set_mode(&g_npm_state,
+                 state->command.npm_mode,
+                 state->command.npm_letter,
+                 state->command.npm_r,
+                 state->command.npm_g,
+                 state->command.npm_b);
+}
+
+void update_neopixel_ring(DeviceState* state)
+{
+    // Update NeoPixel ring mode from command state
+    npr_set_mode(&g_npr_state,
+                 state->command.npr_mode,
+                 state->command.npr_r,
+                 state->command.npr_g,
+                 state->command.npr_b);
 }

@@ -53,30 +53,38 @@ def _auto_detect_serial_port() -> str:
 
         ports = list(serial.tools.list_ports.comports())
 
+        # Print available ports for debugging
+        if ports:
+            print(f"[Config] Available serial ports:")
+            for p in ports:
+                print(f"  - {p.device}: {p.description} ({p.manufacturer or 'unknown'})")
+        else:
+            print("[Config] No serial ports found")
+
         for port in ports:
             port_info = f"{port.description} {port.manufacturer or ''} {port.product or ''}"
             port_info_upper = port_info.upper()
 
             for keyword in esp32_keywords:
                 if keyword.upper() in port_info_upper:
-                    _config_logger.info(f"Auto-detected serial port: {port.device} ({port.description})")
+                    print(f"[Config] Auto-detected ESP32 port: {port.device} ({port.description})")
                     return port.device
 
         # If no match found, try first available COM/ttyUSB port
         for port in ports:
             if IS_WINDOWS and port.device.startswith("COM"):
-                _config_logger.info(f"Using first available COM port: {port.device}")
+                print(f"[Config] Using first available COM port: {port.device}")
                 return port.device
             elif IS_LINUX and ("ttyUSB" in port.device or "ttyACM" in port.device):
-                _config_logger.info(f"Using first available USB serial port: {port.device}")
+                print(f"[Config] Using first available USB serial port: {port.device}")
                 return port.device
 
-        _config_logger.warning("No serial ports detected, using platform default")
+        print("[Config] WARNING: No serial ports detected, using platform default")
 
     except ImportError:
-        _config_logger.warning("pyserial not installed, using platform default port")
+        print("[Config] WARNING: pyserial not installed, using platform default port")
     except Exception as e:
-        _config_logger.warning(f"Serial port auto-detection failed: {e}")
+        print(f"[Config] WARNING: Serial port auto-detection failed: {e}")
 
     # Fall back to platform defaults
     if IS_WINDOWS:
@@ -89,9 +97,9 @@ def _auto_detect_serial_port() -> str:
 # -----------------------------------------------------------------------------
 # Camera Settings
 # -----------------------------------------------------------------------------
-CAMERA_INDEX = 0
-CAMERA_WIDTH = 640
-CAMERA_HEIGHT = 480
+CAMERA_INDEX = 1
+CAMERA_WIDTH = 640*2
+CAMERA_HEIGHT = 480*2
 CAMERA_FPS = 30
 
 # Platform-specific camera backend
@@ -107,6 +115,7 @@ else:
 # -----------------------------------------------------------------------------
 # Auto-detect serial port (can be overridden in local_config.py)
 UART_PORT = _auto_detect_serial_port()
+print(f"[Config] Using UART port: {UART_PORT}")
 
 UART_BAUDRATE = 115200
 UART_TIMEOUT = 0.01  # seconds
@@ -119,19 +128,23 @@ UART_MOCK_ENABLED = False  # Set True to simulate ESP32 responses
 # -----------------------------------------------------------------------------
 # Face Detection Settings
 # -----------------------------------------------------------------------------
-FACE_DETECTION_CONFIDENCE = 0.5
-FACE_TRACKING_CONFIDENCE = 0.5
-MAX_NUM_FACES = 1
+FACE_DETECTION_CONFIDENCE = 0.3
+FACE_TRACKING_CONFIDENCE = 0.3
+MAX_NUM_FACES = 4
 
 # YOLO Face Detection (hybrid mode)
+# Model size: 'n' (nano/fast), 's' (small/balanced), 'm' (medium/accurate), 'l' (large/best)
+YOLO_MODEL_SIZE = 'n'  # 'small' - good balance of speed and distance detection
+
 # Minimum face width as ratio of frame width (reject faces smaller than this)
-MIN_FACE_WIDTH_RATIO = 0.08  # 8% of frame width
+# 0.05 = 5% = ~32 pixels on 640px frame - filters small false positives
+MIN_FACE_WIDTH_RATIO = 0.05
 
 # -----------------------------------------------------------------------------
 # Facing Detection
 # -----------------------------------------------------------------------------
-FACING_YAW_THRESHOLD = 15.0  # degrees - subject considered facing if |yaw| < this
-FACING_PITCH_THRESHOLD = 20.0  # degrees
+FACING_YAW_THRESHOLD = 90.0  # degrees - subject considered facing if |yaw| < this
+FACING_PITCH_THRESHOLD = 90.0  # degrees
 
 # -----------------------------------------------------------------------------
 # Servo Control
@@ -141,6 +154,13 @@ SERVO_MAX_ANGLE = 180.0
 SERVO_CENTER_ANGLE = 90.0
 SERVO_TRACKING_GAIN = 0.5  # How aggressively servo follows face (0.0-1.0)
 SERVO_DEADZONE = 2.0  # degrees - don't move if target within this range
+
+# -----------------------------------------------------------------------------
+# Face Tracking (State Machine)
+# -----------------------------------------------------------------------------
+TRACKING_VELOCITY_GAIN = 0.1  # How fast servo follows face position (0.0-1.0)
+TRACKING_MAX_VELOCITY = 4.0    # Max servo movement per tick in degrees (higher = faster)
+TRACKING_DEADZONE = 0.067       # Fraction of frame width to ignore (0.05 = 5%)
 
 # -----------------------------------------------------------------------------
 # Light Control
@@ -158,7 +178,7 @@ CMD_FLAG_LED_TEST = 0x01  # Bit 0: Trigger LED blink test on ESP32
 # Dashboard Settings
 # -----------------------------------------------------------------------------
 DASHBOARD_WIDTH = 1024
-DASHBOARD_HEIGHT = 720  # Increased for RGB and Matrix controls
+DASHBOARD_HEIGHT = 800  # Increased for state machine controls
 DASHBOARD_FPS = 30
 VIDEO_PANEL_WIDTH = 640
 VIDEO_PANEL_HEIGHT = 480

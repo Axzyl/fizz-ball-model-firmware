@@ -1,4 +1,19 @@
-"""UART protocol encoding and decoding."""
+"""UART protocol encoding and decoding.
+
+Multi-message protocol format:
+- $SRV,<s1>,<s2>,<s3>             - Servo targets (sent at 50Hz)
+- $LGT,<cmd>                       - Light command (sent on change)
+- $RGB,<mode>,<r>,<g>,<b>          - RGB strip (mode 0=solid, 1=rainbow)
+- $MTX,<left>,<right>              - MAX7219 patterns (sent on change)
+- $NPM,<mode>,<letter>,<r>,<g>,<b> - NeoPixel matrix (sent on change)
+- $NPR,<mode>,<r>,<g>,<b>          - NeoPixel ring (sent on change)
+- $FLG,<flags>                     - Command flags (sent on change)
+- $VLV,<open>                      - Valve command: 0=close, 1=open
+- $EST,<enable>                    - Emergency stop: 0=disable, 1=enable
+
+Status from ESP32:
+- $STS,<limit>,<s1>,<s2>,<s3>,<light>,<flags>,<test>,<valve_open>,<valve_enabled>,<valve_ms>
+"""
 
 from __future__ import annotations
 
@@ -12,27 +27,26 @@ logger = logging.getLogger(__name__)
 NUM_SERVOS = 3
 
 
-@dataclass
-class CommandPacket:
-    """Command packet to send to ESP32."""
+# NeoPixel Matrix modes
+NPM_MODE_OFF = 0        # All LEDs off
+NPM_MODE_LETTER = 1     # Display a single letter
+NPM_MODE_SCROLL = 2     # Scroll text across matrix
+NPM_MODE_RAINBOW = 3    # Rainbow animation
+NPM_MODE_SOLID = 4      # Solid color fill
+NPM_MODE_EYE_CLOSED = 5 # Closed eye pattern (sleeping)
+NPM_MODE_EYE_OPEN = 6   # Open eye pattern (alert)
 
-    servo_targets: tuple[float, float, float]  # Target angles for 3 servos
-    light_command: int
-    flags: int = 0
-    rgb_r: int = 0
-    rgb_g: int = 0
-    rgb_b: int = 0
-    matrix_left: int = 1   # Left matrix pattern (0=off, 1=circle, 2=X)
-    matrix_right: int = 2  # Right matrix pattern (0=off, 1=circle, 2=X)
+# NeoPixel Ring modes
+NPR_MODE_OFF = 0      # All LEDs off
+NPR_MODE_SOLID = 1    # Solid color fill
+NPR_MODE_RAINBOW = 2  # Rainbow wave animation
+NPR_MODE_CHASE = 3    # Single LED chase animation
+NPR_MODE_BREATHE = 4  # Breathing/pulse effect
+NPR_MODE_SPINNER = 5  # Spinning dot animation
 
-    def encode(self) -> bytes:
-        """Encode packet to bytes for transmission."""
-        packet = (
-            f"$CMD,{self.servo_targets[0]:.1f},{self.servo_targets[1]:.1f},{self.servo_targets[2]:.1f},"
-            f"{self.light_command},{self.flags},"
-            f"{self.rgb_r},{self.rgb_g},{self.rgb_b},{self.matrix_left},{self.matrix_right}\n"
-        )
-        return packet.encode("ascii")
+# RGB Strip modes
+RGB_MODE_SOLID = 0    # Static solid color
+RGB_MODE_RAINBOW = 1  # Cycling rainbow animation
 
 
 @dataclass
@@ -44,6 +58,9 @@ class StatusPacket:
     light_state: int
     flags: int
     test_active: int = 0  # 1 when test was triggered, stays high for 1 second
+    valve_open: int = 0  # 1 when valve is open
+    valve_enabled: int = 1  # 0 when emergency stop active
+    valve_ms: int = 0  # How long valve has been open (ms)
 
     @classmethod
     def decode(cls, data: bytes) -> Optional["StatusPacket"]:
@@ -69,13 +86,17 @@ class StatusPacket:
             content = line[5:]  # Remove "$STS,"
             fields = content.split(",")
 
-            # New format: limit, servo1, servo2, servo3, light_state, flags, test_active
-            if len(fields) < 6 or len(fields) > 7:
+            # Format: limit, servo1, servo2, servo3, light_state, flags, test_active, valve_open, valve_enabled, valve_ms
+            # Minimum 6 fields, maximum 10 (backwards compatible)
+            if len(fields) < 6:
                 logger.debug(f"Invalid field count: {len(fields)}")
                 return None
 
-            # Parse test_active if present (backwards compatible)
+            # Parse optional fields with defaults for backwards compatibility
             test_active = int(fields[6]) if len(fields) >= 7 else 0
+            valve_open = int(fields[7]) if len(fields) >= 8 else 0
+            valve_enabled = int(fields[8]) if len(fields) >= 9 else 1
+            valve_ms = int(fields[9]) if len(fields) >= 10 else 0
 
             return cls(
                 limit=int(fields[0]),
@@ -87,6 +108,9 @@ class StatusPacket:
                 light_state=int(fields[4]),
                 flags=int(fields[5]),
                 test_active=test_active,
+                valve_open=valve_open,
+                valve_enabled=valve_enabled,
+                valve_ms=valve_ms,
             )
 
         except (ValueError, UnicodeDecodeError) as e:
@@ -99,6 +123,7 @@ class Protocol:
     UART protocol handler.
 
     Manages packet encoding/decoding and buffer handling.
+    Uses multi-message format for flexible control.
     """
 
     START_MARKER = b"$"
@@ -109,48 +134,168 @@ class Protocol:
         """Initialize protocol handler."""
         self.rx_buffer = bytearray()
 
-    def create_command(
+    # =========================================================================
+    # Message Creation Functions
+    # =========================================================================
+
+    def create_servo_message(
         self,
-        servo_targets: tuple[float, float, float],
-        light_command: int,
-        flags: int = 0,
-        rgb_r: int = 0,
-        rgb_g: int = 0,
-        rgb_b: int = 0,
-        matrix_left: int = 1,
-        matrix_right: int = 2,
+        s1: float,
+        s2: float,
+        s3: float,
     ) -> bytes:
         """
-        Create a command packet.
+        Create servo target message.
 
         Args:
-            servo_targets: Target servo angles (0-180) for all 3 servos
-            light_command: Light command (0=OFF, 1=ON, 2=AUTO)
-            flags: Reserved flags
-            rgb_r: RGB red value (0-255)
-            rgb_g: RGB green value (0-255)
-            rgb_b: RGB blue value (0-255)
-            matrix_left: Left matrix pattern (0=off, 1=circle, 2=X)
-            matrix_right: Right matrix pattern (0=off, 1=circle, 2=X)
+            s1: Servo 1 target angle (0-180)
+            s2: Servo 2 target angle (0-180)
+            s3: Servo 3 target angle (0-180)
 
         Returns:
-            Encoded packet bytes
+            Encoded message bytes: $SRV,<s1>,<s2>,<s3>\n
         """
-        # Clamp servo targets
-        clamped_targets = tuple(
-            max(0.0, min(180.0, t)) for t in servo_targets
-        )
+        s1 = max(0.0, min(180.0, s1))
+        s2 = max(0.0, min(180.0, s2))
+        s3 = max(0.0, min(180.0, s3))
+        return f"$SRV,{s1:.1f},{s2:.1f},{s3:.1f}\n".encode("ascii")
 
-        # Clamp RGB values
-        rgb_r = max(0, min(255, rgb_r))
-        rgb_g = max(0, min(255, rgb_g))
-        rgb_b = max(0, min(255, rgb_b))
+    def create_light_message(self, cmd: int) -> bytes:
+        """
+        Create light command message.
 
-        packet = CommandPacket(
-            clamped_targets, light_command, flags,
-            rgb_r, rgb_g, rgb_b, matrix_left, matrix_right
-        )
-        return packet.encode()
+        Args:
+            cmd: Light command (0=OFF, 1=ON, 2=AUTO)
+
+        Returns:
+            Encoded message bytes: $LGT,<cmd>\n
+        """
+        cmd = max(0, min(2, cmd))
+        return f"$LGT,{cmd}\n".encode("ascii")
+
+    def create_rgb_message(self, mode: int, r: int, g: int, b: int) -> bytes:
+        """
+        Create RGB strip message.
+
+        Args:
+            mode: RGB mode (RGB_MODE_SOLID=0, RGB_MODE_RAINBOW=1)
+            r: Red value (0-255)
+            g: Green value (0-255)
+            b: Blue value (0-255)
+
+        Returns:
+            Encoded message bytes: $RGB,<mode>,<r>,<g>,<b>\n
+        """
+        mode = max(0, min(1, mode))
+        r = max(0, min(255, r))
+        g = max(0, min(255, g))
+        b = max(0, min(255, b))
+        return f"$RGB,{mode},{r},{g},{b}\n".encode("ascii")
+
+    def create_matrix_message(self, left: int, right: int) -> bytes:
+        """
+        Create MAX7219 matrix pattern message.
+
+        Args:
+            left: Left matrix pattern ID
+            right: Right matrix pattern ID
+
+        Returns:
+            Encoded message bytes: $MTX,<left>,<right>\n
+        """
+        return f"$MTX,{left},{right}\n".encode("ascii")
+
+    def create_npm_message(
+        self,
+        mode: int,
+        letter: str,
+        r: int,
+        g: int,
+        b: int,
+    ) -> bytes:
+        """
+        Create NeoPixel matrix message.
+
+        Args:
+            mode: NeoPixel matrix mode (NPM_MODE_*)
+            letter: Letter to display (A-Z)
+            r: Red value (0-255)
+            g: Green value (0-255)
+            b: Blue value (0-255)
+
+        Returns:
+            Encoded message bytes: $NPM,<mode>,<letter>,<r>,<g>,<b>\n
+        """
+        r = max(0, min(255, r))
+        g = max(0, min(255, g))
+        b = max(0, min(255, b))
+        # Ensure single character
+        letter = letter[0] if letter else "A"
+        return f"$NPM,{mode},{letter},{r},{g},{b}\n".encode("ascii")
+
+    def create_npr_message(
+        self,
+        mode: int,
+        r: int,
+        g: int,
+        b: int,
+    ) -> bytes:
+        """
+        Create NeoPixel ring message.
+
+        Args:
+            mode: NeoPixel ring mode (NPR_MODE_*)
+            r: Red value (0-255)
+            g: Green value (0-255)
+            b: Blue value (0-255)
+
+        Returns:
+            Encoded message bytes: $NPR,<mode>,<r>,<g>,<b>\n
+        """
+        r = max(0, min(255, r))
+        g = max(0, min(255, g))
+        b = max(0, min(255, b))
+        return f"$NPR,{mode},{r},{g},{b}\n".encode("ascii")
+
+    def create_flags_message(self, flags: int) -> bytes:
+        """
+        Create command flags message.
+
+        Args:
+            flags: Command flags byte
+
+        Returns:
+            Encoded message bytes: $FLG,<flags>\n
+        """
+        return f"$FLG,{flags}\n".encode("ascii")
+
+    def create_valve_message(self, open: bool) -> bytes:
+        """
+        Create valve command message.
+
+        Args:
+            open: True to open valve, False to close
+
+        Returns:
+            Encoded message bytes: $VLV,<open>\n
+        """
+        return f"$VLV,{1 if open else 0}\n".encode("ascii")
+
+    def create_estop_message(self, enable: bool) -> bytes:
+        """
+        Create emergency stop message.
+
+        Args:
+            enable: True to enable valve operation, False to disable (emergency stop)
+
+        Returns:
+            Encoded message bytes: $EST,<enable>\n
+        """
+        return f"$EST,{1 if enable else 0}\n".encode("ascii")
+
+    # =========================================================================
+    # Receive Buffer Handling
+    # =========================================================================
 
     def feed(self, data: bytes) -> list[StatusPacket]:
         """
