@@ -485,8 +485,8 @@ class FaceTracker:
                 # Determine if facing (using config thresholds)
                 is_facing = (
                     is_valid and
-                    abs(pitch) < config.FACING_YAW_THRESHOLD and
-                    abs(self.validator.normalize_roll(roll)) < config.FACING_PITCH_THRESHOLD
+                    abs(yaw) < config.FACING_YAW_THRESHOLD and
+                    abs(pitch) < config.FACING_PITCH_THRESHOLD
                 )
 
                 # Calculate distance from center (face center x to frame center)

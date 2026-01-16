@@ -103,6 +103,14 @@ CAMERA_HEIGHT = 480*2
 CAMERA_FPS = 30
 CAMERA_MAX_FAILURES = 30  # Consecutive failures before declaring disconnect (~1s at 30fps)
 
+# Camera crop settings (percentage of frame to remove from each edge)
+# Useful for excluding enclosure edges, reflections, or irrelevant areas
+# Values are 0.0 to 0.5 (0% to 50%) - combined left+right or top+bottom must be < 1.0
+CAMERA_CROP_LEFT = 0.0    # Crop from left edge (0.1 = 10%)
+CAMERA_CROP_RIGHT = 0.0   # Crop from right edge
+CAMERA_CROP_TOP = 0.0     # Crop from top edge
+CAMERA_CROP_BOTTOM = 0.0  # Crop from bottom edge
+
 # Dark frame detection (door closed detection)
 # When the door is closed, the camera sees darkness. However, internal LEDs (strip lights,
 # neopixels) may produce some ambient light even with the door closed.
@@ -131,10 +139,10 @@ CAMERA_MAX_FAILURES = 30  # Consecutive failures before declaring disconnect (~1
 #   - Door open typically has std dev ~30+
 #
 # Tuning: Use test_brightness.py to find optimal values for your setup
-DARK_THRESHOLD = 25  # 0-255 scale - raised from 15 to tolerate some internal LED light
+DARK_THRESHOLD = 40  # 0-255 scale - raised from 15 to tolerate some internal LED light
 DARK_PERCENTILE = 75  # Use 75th percentile (robust to bright LED spots)
-DARK_USE_VARIANCE = False  # Set True to also check color uniformity
-DARK_VARIANCE_THRESHOLD = 20  # Std dev below this = uniform (door closed)
+DARK_USE_VARIANCE = True  # Set True to also check color uniformity
+DARK_VARIANCE_THRESHOLD = 40  # Std dev below this = uniform (door closed)
 
 # Platform-specific camera backend
 if IS_WINDOWS:
@@ -178,7 +186,7 @@ MIN_FACE_WIDTH_RATIO = 0.04
 # Facing Detection
 # -----------------------------------------------------------------------------
 FACING_YAW_THRESHOLD = 90.0  # degrees - subject considered facing if |yaw| < this
-FACING_PITCH_THRESHOLD = 90.0  # degrees
+FACING_PITCH_THRESHOLD = 15.0  # degrees
 
 # -----------------------------------------------------------------------------
 # Servo Control

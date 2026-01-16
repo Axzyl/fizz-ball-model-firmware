@@ -48,6 +48,12 @@ class VisionThread(threading.Thread):
     # Camera connection tracking - use config value or default
     MAX_CONSECUTIVE_FAILURES = getattr(config, 'CAMERA_MAX_FAILURES', 30)
 
+    # Camera crop settings - percentage of frame to remove from each edge
+    CROP_LEFT = getattr(config, 'CAMERA_CROP_LEFT', 0.0)
+    CROP_RIGHT = getattr(config, 'CAMERA_CROP_RIGHT', 0.0)
+    CROP_TOP = getattr(config, 'CAMERA_CROP_TOP', 0.0)
+    CROP_BOTTOM = getattr(config, 'CAMERA_CROP_BOTTOM', 0.0)
+
     def __init__(
         self,
         state: AppState,
@@ -66,6 +72,32 @@ class VisionThread(threading.Thread):
         # Camera connection tracking
         self.consecutive_failures = 0
         self.camera_connected = False
+
+    def _crop_frame(self, frame: np.ndarray) -> np.ndarray:
+        """Apply configured crop to frame.
+
+        Crops percentage from each edge as specified in config.
+        Returns original frame if no cropping configured.
+        """
+        # Skip if no crop configured
+        if (self.CROP_LEFT == 0 and self.CROP_RIGHT == 0 and
+            self.CROP_TOP == 0 and self.CROP_BOTTOM == 0):
+            return frame
+
+        h, w = frame.shape[:2]
+
+        # Calculate pixel offsets
+        left = int(w * self.CROP_LEFT)
+        right = int(w * (1.0 - self.CROP_RIGHT))
+        top = int(h * self.CROP_TOP)
+        bottom = int(h * (1.0 - self.CROP_BOTTOM))
+
+        # Ensure valid crop region
+        if left >= right or top >= bottom:
+            logger.warning("Invalid crop settings - returning uncropped frame")
+            return frame
+
+        return frame[top:bottom, left:right]
 
     def run(self) -> None:
         """Main vision loop - identical structure to vision_servo_test.py"""
@@ -120,7 +152,10 @@ class VisionThread(threading.Thread):
                 logger.info("Camera reconnected")
             self.camera_connected = True
 
-            # Get actual frame dimensions (same as vision_servo_test.py)
+            # Apply crop before any CV processing
+            frame = self._crop_frame(frame)
+
+            # Get actual frame dimensions (after crop)
             frame_h, frame_w = frame.shape[:2]
 
             # Check if frame is too dark (door closed) - skip CV to save CPU

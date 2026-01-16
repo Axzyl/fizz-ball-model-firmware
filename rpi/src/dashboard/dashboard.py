@@ -116,7 +116,12 @@ class Dashboard:
 
             # Handle keyboard input
             key = cv2.waitKey(1) & 0xFF
-            if key == ord("q") or key == 27:  # 'q' or ESC
+
+            # First check if text field should handle this input
+            if self.telemetry_panel.handle_text_input(key):
+                # Input was consumed by text field
+                pass
+            elif key == ord("q") or key == 27:  # 'q' or ESC
                 logger.info("User requested exit")
                 self.stop_event.set()
                 break
@@ -322,10 +327,27 @@ class Dashboard:
                 # Store click position for color wheel
                 self._last_click_x = panel_x
 
+                # Check if a text field was clicked
+                text_field_name = self.telemetry_panel.get_text_field_at(panel_x, panel_y)
+                if text_field_name:
+                    # Deactivate any existing field first
+                    self.telemetry_panel.deactivate_text_field()
+                    # Activate the clicked field
+                    self.telemetry_panel.activate_text_field(text_field_name)
+                    return
+
+                # Clicking elsewhere deactivates text field
+                if self.telemetry_panel.active_text_field:
+                    self.telemetry_panel.deactivate_text_field()
+
                 # Check if a button was clicked
                 button_name = self.telemetry_panel.get_button_at(panel_x, panel_y)
                 if button_name:
                     self._handle_button_click(button_name)
+            else:
+                # Clicked outside telemetry panel - deactivate text field
+                if self.telemetry_panel.active_text_field:
+                    self.telemetry_panel.deactivate_text_field()
 
     def _handle_button_click(self, button_name: str) -> None:
         """

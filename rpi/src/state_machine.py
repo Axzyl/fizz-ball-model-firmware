@@ -470,18 +470,24 @@ class StateMachine:
         if esp.limit_triggered:
             if not self._has_dispensed:
                 # First dispense - requires holding for dispense_hold_duration
-                if self._limit_switch_hold_start == 0:
-                    # Start tracking hold time
-                    self._limit_switch_hold_start = time.time()
+                # AND at least one person must be facing the camera
+                any_facing = face.detected and face.num_facing > 0
+                if any_facing:
+                    if self._limit_switch_hold_start == 0:
+                        # Start tracking hold time
+                        self._limit_switch_hold_start = time.time()
 
-                hold_elapsed = time.time() - self._limit_switch_hold_start
-                if hold_elapsed >= self.config.dispense_hold_duration:
-                    # Held long enough - start dispense
-                    self._has_dispensed = True
-                    self._dispense_start = time.time()
-                    self._limit_switch_hold_start = 0  # Reset for next time
-                    return AliveBehavior.DISPENSING
-                # Still holding, not long enough yet - continue with normal behavior
+                    hold_elapsed = time.time() - self._limit_switch_hold_start
+                    if hold_elapsed >= self.config.dispense_hold_duration:
+                        # Held long enough while facing - start dispense
+                        self._has_dispensed = True
+                        self._dispense_start = time.time()
+                        self._limit_switch_hold_start = 0  # Reset for next time
+                        return AliveBehavior.DISPENSING
+                    # Still holding, not long enough yet - continue with normal behavior
+                else:
+                    # No one facing camera - reset hold timer (must face to dispense)
+                    self._limit_switch_hold_start = 0
             else:
                 # Already dispensed - reject immediately (no hold required)
                 self._reject_start = time.time()
@@ -536,7 +542,7 @@ class StateMachine:
         )
 
     def _alive_detected(self, face: FaceState, esp: EspState) -> dict:
-        """ALIVE detected: Green, tracking, periodic arm wave."""
+        """ALIVE detected: Green if facing, yellow-green if not facing."""
         # Update tracking position
         velocity = self._calculate_tracking_velocity_from_position(face)
         self.tracking_base_position += velocity
@@ -558,17 +564,35 @@ class StateMachine:
         if self._wave_active:
             arm_pos = self._update_wave()
 
-        return self._make_commands(
-            servo_target_1=self.tracking_base_position,
-            servo_target_2=arm_pos,
-            valve_open=False,
-            npm_mode=NPM_EYE_OPEN,
-            npm_r=0, npm_g=255, npm_b=0,  # Green
-            npr_mode=NPR_SOLID,
-            npr_r=0, npr_g=255, npr_b=0,
-            rgb_mode=RGB_SOLID,
-            rgb_r=0, rgb_g=200, rgb_b=0,
-        )
+        # Check if ANY face is facing the camera
+        any_facing = face.num_facing > 0
+
+        if any_facing:
+            # Green - someone is facing the camera
+            return self._make_commands(
+                servo_target_1=self.tracking_base_position,
+                servo_target_2=arm_pos,
+                valve_open=False,
+                npm_mode=NPM_EYE_OPEN,
+                npm_r=0, npm_g=255, npm_b=0,  # Green
+                npr_mode=NPR_SOLID,
+                npr_r=0, npr_g=255, npr_b=0,
+                rgb_mode=RGB_SOLID,
+                rgb_r=0, rgb_g=200, rgb_b=0,
+            )
+        else:
+            # Yellow-green - detected but not facing
+            return self._make_commands(
+                servo_target_1=self.tracking_base_position,
+                servo_target_2=arm_pos,
+                valve_open=False,
+                npm_mode=NPM_EYE_OPEN,
+                npm_r=180, npm_g=255, npm_b=0,  # Yellow-green
+                npr_mode=NPR_SOLID,
+                npr_r=180, npr_g=255, npr_b=0,
+                rgb_mode=RGB_SOLID,
+                rgb_r=150, rgb_g=200, rgb_b=0,
+            )
 
     def _alive_dispensing(self, face: FaceState, esp: EspState) -> dict:
         """ALIVE dispensing: Valve open, aqua flash with open eyes."""

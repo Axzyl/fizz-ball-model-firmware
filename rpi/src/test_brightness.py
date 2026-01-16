@@ -18,6 +18,7 @@ Controls:
     R        - Reset to defaults
     P        - Print current values for config.py
     M        - Toggle detection mode (brightness only / brightness + variance)
+    C        - Toggle crop preview (show crop boundaries on original frame)
 """
 
 import cv2
@@ -31,11 +32,20 @@ try:
     DEFAULT_PERCENTILE = getattr(config, 'DARK_PERCENTILE', 75)
     DEFAULT_VARIANCE_THRESHOLD = getattr(config, 'DARK_VARIANCE_THRESHOLD', 15)
     CAMERA_INDEX = getattr(config, 'CAMERA_INDEX', 0)
+    # Crop settings
+    CROP_LEFT = getattr(config, 'CAMERA_CROP_LEFT', 0.0)
+    CROP_RIGHT = getattr(config, 'CAMERA_CROP_RIGHT', 0.0)
+    CROP_TOP = getattr(config, 'CAMERA_CROP_TOP', 0.0)
+    CROP_BOTTOM = getattr(config, 'CAMERA_CROP_BOTTOM', 0.0)
 except ImportError:
     DEFAULT_THRESHOLD = 25
     DEFAULT_PERCENTILE = 75
     DEFAULT_VARIANCE_THRESHOLD = 15
     CAMERA_INDEX = 0
+    CROP_LEFT = 0.0
+    CROP_RIGHT = 0.0
+    CROP_TOP = 0.0
+    CROP_BOTTOM = 0.0
 
 
 def calculate_entropy(gray):
@@ -73,6 +83,28 @@ def calculate_color_variance(frame):
     return avg_spatial_variance
 
 
+def crop_frame(frame):
+    """Apply configured crop to frame."""
+    # Skip if no crop configured
+    if (CROP_LEFT == 0 and CROP_RIGHT == 0 and
+        CROP_TOP == 0 and CROP_BOTTOM == 0):
+        return frame
+
+    h, w = frame.shape[:2]
+
+    # Calculate pixel offsets
+    left = int(w * CROP_LEFT)
+    right = int(w * (1.0 - CROP_RIGHT))
+    top = int(h * CROP_TOP)
+    bottom = int(h * (1.0 - CROP_BOTTOM))
+
+    # Ensure valid crop region
+    if left >= right or top >= bottom:
+        return frame
+
+    return frame[top:bottom, left:right]
+
+
 class BrightnessTester:
     """Simple brightness detection tester with live UI."""
 
@@ -84,6 +116,9 @@ class BrightnessTester:
 
         # Detection mode: True = use both brightness AND variance
         self.use_variance = True
+
+        # Crop preview mode: True = show original frame with crop boundaries
+        self.show_crop_preview = False
 
         # History for smoothing display
         self.brightness_history = []
@@ -99,12 +134,15 @@ class BrightnessTester:
         print(f"Brightness threshold: {self.threshold}")
         print(f"Brightness percentile: {self.percentile}")
         print(f"Variance threshold: {self.variance_threshold}")
+        if CROP_LEFT > 0 or CROP_RIGHT > 0 or CROP_TOP > 0 or CROP_BOTTOM > 0:
+            print(f"Crop: L={CROP_LEFT*100:.0f}% R={CROP_RIGHT*100:.0f}% T={CROP_TOP*100:.0f}% B={CROP_BOTTOM*100:.0f}%")
         print()
         print("Controls:")
         print("  UP/DOWN    - Adjust brightness threshold (+/- 5)")
         print("  LEFT/RIGHT - Adjust percentile (+/- 5)")
         print("  W/S        - Adjust variance threshold (+/- 5)")
         print("  M          - Toggle mode (brightness only / brightness+variance)")
+        print("  C          - Toggle crop preview (show boundaries)")
         print("  R          - Reset to defaults")
         print("  P          - Print values for config.py")
         print("  Q/ESC      - Quit")
@@ -123,10 +161,13 @@ class BrightnessTester:
         cv2.namedWindow("Brightness Tester", cv2.WINDOW_AUTOSIZE)
 
         while True:
-            ret, frame = cap.read()
+            ret, frame_original = cap.read()
             if not ret:
                 print("Failed to capture frame")
                 continue
+
+            # Apply crop before any processing (same as main.py)
+            frame = crop_frame(frame_original)
 
             # Calculate brightness (same algorithm as main.py)
             if len(frame.shape) == 3:
@@ -178,7 +219,7 @@ class BrightnessTester:
                 'is_bright_dark': is_bright_dark,
                 'is_var_low': is_var_low,
             }
-            display = self._create_display(frame, gray, metrics, is_dark)
+            display = self._create_display(frame, frame_original, gray, metrics, is_dark)
 
             cv2.imshow("Brightness Tester", display)
 
@@ -208,6 +249,10 @@ class BrightnessTester:
                 self.use_variance = not self.use_variance
                 mode_str = "Brightness + Variance" if self.use_variance else "Brightness only"
                 print(f"Mode: {mode_str}")
+            elif key == ord('c'):  # Toggle crop preview
+                self.show_crop_preview = not self.show_crop_preview
+                preview_str = "ON (showing original with crop bounds)" if self.show_crop_preview else "OFF (showing cropped)"
+                print(f"Crop preview: {preview_str}")
             elif key == ord('r'):  # Reset
                 self.threshold = DEFAULT_THRESHOLD
                 self.percentile = DEFAULT_PERCENTILE
@@ -230,14 +275,57 @@ class BrightnessTester:
         cv2.destroyAllWindows()
         print("Done.")
 
-    def _create_display(self, frame, gray, metrics, is_dark):
+    def _create_display(self, frame, frame_original, gray, metrics, is_dark):
         """Create the display frame with overlays."""
-        h, w = frame.shape[:2]
+        # Decide which frame to show
+        if self.show_crop_preview:
+            # Show original frame with crop boundaries
+            display_frame = frame_original.copy()
+            orig_h, orig_w = frame_original.shape[:2]
+
+            # Calculate crop boundaries in pixels
+            left = int(orig_w * CROP_LEFT)
+            right = int(orig_w * (1.0 - CROP_RIGHT))
+            top = int(orig_h * CROP_TOP)
+            bottom = int(orig_h * (1.0 - CROP_BOTTOM))
+
+            # Draw excluded regions with semi-transparent red overlay
+            overlay = display_frame.copy()
+            # Left region
+            if left > 0:
+                cv2.rectangle(overlay, (0, 0), (left, orig_h), (0, 0, 150), -1)
+            # Right region
+            if right < orig_w:
+                cv2.rectangle(overlay, (right, 0), (orig_w, orig_h), (0, 0, 150), -1)
+            # Top region (between left and right)
+            if top > 0:
+                cv2.rectangle(overlay, (left, 0), (right, top), (0, 0, 150), -1)
+            # Bottom region (between left and right)
+            if bottom < orig_h:
+                cv2.rectangle(overlay, (left, bottom), (right, orig_h), (0, 0, 150), -1)
+
+            # Blend overlay
+            cv2.addWeighted(overlay, 0.4, display_frame, 0.6, 0, display_frame)
+
+            # Draw crop boundary rectangle (cyan)
+            cv2.rectangle(display_frame, (left, top), (right, bottom), (255, 255, 0), 2)
+
+            # Label
+            cv2.putText(display_frame, "CROP PREVIEW (C to toggle)", (10, 25),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+            cv2.putText(display_frame, f"L:{CROP_LEFT*100:.0f}% R:{CROP_RIGHT*100:.0f}% T:{CROP_TOP*100:.0f}% B:{CROP_BOTTOM*100:.0f}%",
+                        (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+
+            h, w = display_frame.shape[:2]
+        else:
+            # Show cropped frame (normal mode)
+            display_frame = frame
+            h, w = frame.shape[:2]
 
         # Create a wider canvas to show info panel
         canvas_width = w + 280
         canvas = np.zeros((h, canvas_width, 3), dtype=np.uint8)
-        canvas[:, :w] = frame
+        canvas[:, :w] = display_frame
 
         # Info panel background
         cv2.rectangle(canvas, (w, 0), (canvas_width, h), (30, 30, 30), -1)
@@ -380,15 +468,15 @@ class BrightnessTester:
         cv2.putText(canvas, "W/S: Variance threshold", (x_text, y),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.35, (120, 120, 120), 1)
         y += 14
-        cv2.putText(canvas, "M: Toggle mode", (x_text, y),
+        cv2.putText(canvas, "M: Toggle mode  C: Crop preview", (x_text, y),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.35, (120, 120, 120), 1)
         y += 14
         cv2.putText(canvas, "R: Reset  P: Print  Q: Quit", (x_text, y),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.35, (120, 120, 120), 1)
 
-        # Add "DARK" overlay on video if dark
-        if is_dark:
-            overlay = frame.copy()
+        # Add "DARK" overlay on video if dark (only in normal mode, not crop preview)
+        if is_dark and not self.show_crop_preview:
+            overlay = display_frame.copy()
             cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 100), -1)
             cv2.addWeighted(overlay, 0.3, canvas[:, :w], 0.7, 0, canvas[:, :w])
             cv2.putText(canvas, "DOOR CLOSED", (w // 2 - 100, h // 2),

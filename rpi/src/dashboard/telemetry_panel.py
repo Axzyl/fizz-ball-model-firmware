@@ -32,6 +32,22 @@ class ButtonInfo:
                 self.y <= y <= self.y + self.height)
 
 
+@dataclass
+class TextFieldInfo:
+    """Information about an editable text field."""
+    x: int
+    y: int
+    width: int
+    height: int
+    name: str
+    value: str
+
+    def contains(self, x: int, y: int) -> bool:
+        """Check if a point is inside this field."""
+        return (self.x <= x <= self.x + self.width and
+                self.y <= y <= self.y + self.height)
+
+
 class TelemetryPanel:
     """
     Telemetry panel that displays live system state values.
@@ -86,6 +102,11 @@ class TelemetryPanel:
         self.buttons: list[ButtonInfo] = []
         self.hovered_button: Optional[str] = None
 
+        # Text field support
+        self.text_fields: list[TextFieldInfo] = []
+        self.active_text_field: Optional[str] = None
+        self.text_field_value: str = ""  # Current editing value
+
         # Scrolling support
         self.scroll_offset = 0
         self.content_height = 0  # Will be calculated during render
@@ -138,8 +159,9 @@ class TelemetryPanel:
             if button_name:
                 self.hovered_button = button_name
 
-        # Clear button list for this frame (after hover check)
+        # Clear button and text field lists for this frame (after hover check)
         self.buttons = []
+        self.text_fields = []
 
         # Create a larger buffer for content (will be cropped to viewport)
         buffer_height = max(self.height, 1200)  # Ensure enough space for all content
@@ -299,6 +321,64 @@ class TelemetryPanel:
                 return button.name
         return None
 
+    def get_text_field_at(self, x: int, y: int) -> Optional[str]:
+        """Check if a point is inside any text field."""
+        for field in self.text_fields:
+            if field.contains(x, y):
+                return field.name
+        return None
+
+    def activate_text_field(self, name: str) -> None:
+        """Activate a text field for editing."""
+        for field in self.text_fields:
+            if field.name == name:
+                self.active_text_field = name
+                self.text_field_value = field.value
+                return
+
+    def deactivate_text_field(self) -> None:
+        """Deactivate any active text field and apply value."""
+        if self.active_text_field and self.state_machine:
+            try:
+                value = float(self.text_field_value) if self.text_field_value else 0.0
+                if self.active_text_field == "dispense_duration":
+                    # Update both dispense_duration and dispense_flash_duration
+                    self.state_machine.config.dispense_duration = value
+                    self.state_machine.config.dispense_flash_duration = value
+            except ValueError:
+                pass  # Invalid input, ignore
+        self.active_text_field = None
+        self.text_field_value = ""
+
+    def handle_text_input(self, key: int) -> bool:
+        """
+        Handle keyboard input for active text field.
+
+        Returns True if input was handled, False otherwise.
+        """
+        if not self.active_text_field:
+            return False
+
+        if key == 13 or key == 10:  # Enter
+            self.deactivate_text_field()
+            return True
+        elif key == 27:  # Escape - cancel
+            self.active_text_field = None
+            self.text_field_value = ""
+            return True
+        elif key == 8 or key == 127:  # Backspace
+            self.text_field_value = self.text_field_value[:-1]
+            return True
+        elif 48 <= key <= 57:  # 0-9
+            self.text_field_value += chr(key)
+            return True
+        elif key == 46:  # Period
+            if '.' not in self.text_field_value:
+                self.text_field_value += '.'
+            return True
+
+        return True  # Consume other keys while editing
+
     def _draw_section_header(
         self,
         panel: np.ndarray,
@@ -359,6 +439,96 @@ class TelemetryPanel:
         )
 
         return y + self.LINE_HEIGHT
+
+    def _draw_text_field(
+        self,
+        panel: np.ndarray,
+        label: str,
+        name: str,
+        value: str,
+        y: int,
+        suffix: str = "",
+    ) -> int:
+        """Draw an editable text field and return new y position."""
+        field_x = self.MARGIN + self.LABEL_WIDTH
+        field_y = y
+        field_width = 60
+        field_height = 22
+
+        is_active = (self.active_text_field == name)
+        is_hovered = (self.hovered_button == name)
+
+        # Draw label
+        cv2.putText(
+            panel,
+            label + ":",
+            (self.MARGIN + 10, y + 15),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (150, 150, 150),
+            1,
+        )
+
+        # Draw field background
+        bg_color = (60, 80, 60) if is_active else ((50, 50, 50) if is_hovered else (40, 40, 40))
+        cv2.rectangle(
+            panel,
+            (field_x, field_y),
+            (field_x + field_width, field_y + field_height),
+            bg_color,
+            -1,
+        )
+
+        # Draw border
+        border_color = (100, 200, 100) if is_active else ((150, 150, 150) if is_hovered else (100, 100, 100))
+        cv2.rectangle(
+            panel,
+            (field_x, field_y),
+            (field_x + field_width, field_y + field_height),
+            border_color,
+            2 if is_active else 1,
+        )
+
+        # Draw value (show editing value if active)
+        display_value = self.text_field_value if is_active else value
+        cv2.putText(
+            panel,
+            display_value,
+            (field_x + 5, field_y + 16),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (255, 255, 255),
+            1,
+        )
+
+        # Draw cursor if active
+        if is_active:
+            cursor_x = field_x + 5 + len(display_value) * 9
+            cv2.line(panel, (cursor_x, field_y + 4), (cursor_x, field_y + field_height - 4), (255, 255, 255), 1)
+
+        # Draw suffix (e.g., "s" for seconds)
+        if suffix:
+            cv2.putText(
+                panel,
+                suffix,
+                (field_x + field_width + 5, field_y + 16),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                (150, 150, 150),
+                1,
+            )
+
+        # Store field info
+        self.text_fields.append(TextFieldInfo(
+            x=field_x,
+            y=field_y,
+            width=field_width,
+            height=field_height,
+            name=name,
+            value=value,
+        ))
+
+        return y + field_height + 5
 
     def _draw_button(
         self,
@@ -777,6 +947,11 @@ class TelemetryPanel:
         status_text = "ENABLED" if dispensing_enabled else "DISABLED"
         status_color = config.COLOR_FACING_YES if dispensing_enabled else config.COLOR_FACING_NO
         y = self._draw_value(panel, "Dispensing", status_text, y, status_color)
+
+        # Dispense duration (editable) - click to edit
+        dispense_duration = self.state_machine.config.dispense_duration
+        y = self._draw_text_field(panel, "Pour Time", "dispense_duration",
+                                  f"{dispense_duration:.1f}", y, suffix="s")
 
         # Valve status
         valve_text = "OPEN" if esp.valve_open else "CLOSED"
