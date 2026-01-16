@@ -98,8 +98,8 @@ def _auto_detect_serial_port() -> str:
 # Camera Settings
 # -----------------------------------------------------------------------------
 CAMERA_INDEX = 1
-CAMERA_WIDTH = 640*2
-CAMERA_HEIGHT = 480*2
+CAMERA_WIDTH = 640
+CAMERA_HEIGHT = 480
 CAMERA_FPS = 30
 CAMERA_MAX_FAILURES = 30  # Consecutive failures before declaring disconnect (~1s at 30fps)
 
@@ -110,6 +110,15 @@ CAMERA_CROP_LEFT = 0.0    # Crop from left edge (0.1 = 10%)
 CAMERA_CROP_RIGHT = 0.0   # Crop from right edge
 CAMERA_CROP_TOP = 0.0     # Crop from top edge
 CAMERA_CROP_BOTTOM = 0.0  # Crop from bottom edge
+
+# Camera exposure settings
+# Set CAMERA_AUTO_EXPOSURE = False to use manual exposure control
+# Exposure values are camera-dependent; typical range is -10 to 0 (negative = darker)
+# Brightness range is typically 0-255 or 0.0-1.0 depending on camera
+CAMERA_AUTO_EXPOSURE = False   # True = auto, False = manual exposure
+CAMERA_EXPOSURE = -5          # Manual exposure value (lower = darker, typical: -10 to 0)
+CAMERA_BRIGHTNESS = None      # Brightness override (None = don't change, 0-255 typical)
+CAMERA_GAIN = None            # Gain/ISO override (None = don't change)
 
 # Dark frame detection (door closed detection)
 # When the door is closed, the camera sees darkness. However, internal LEDs (strip lights,

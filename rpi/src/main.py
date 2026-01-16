@@ -112,6 +112,27 @@ class VisionThread(threading.Thread):
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
         self.cap.set(cv2.CAP_PROP_FPS, config.CAMERA_FPS)
 
+        # Apply exposure settings
+        auto_exposure = getattr(config, 'CAMERA_AUTO_EXPOSURE', True)
+        if not auto_exposure:
+            # Disable auto exposure (value varies by camera: 0.25 or 1 for manual)
+            self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+            exposure = getattr(config, 'CAMERA_EXPOSURE', -4)
+            self.cap.set(cv2.CAP_PROP_EXPOSURE, exposure)
+            logger.info(f"Manual exposure set to {exposure}")
+
+        # Apply brightness if specified
+        brightness = getattr(config, 'CAMERA_BRIGHTNESS', None)
+        if brightness is not None:
+            self.cap.set(cv2.CAP_PROP_BRIGHTNESS, brightness)
+            logger.info(f"Brightness set to {brightness}")
+
+        # Apply gain if specified
+        gain = getattr(config, 'CAMERA_GAIN', None)
+        if gain is not None:
+            self.cap.set(cv2.CAP_PROP_GAIN, gain)
+            logger.info(f"Gain set to {gain}")
+
         if not self.cap.isOpened():
             logger.error(f"Failed to open camera {camera_index}")
             self.state.add_error("Failed to open camera")
