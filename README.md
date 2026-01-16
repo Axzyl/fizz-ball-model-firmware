@@ -1,71 +1,151 @@
-# Fizz Ball Model Firmware
+# Schrödinger's Cat Dispenser
 
-A face-tracking camera platform using Raspberry Pi and ESP32. The system tracks a person's face using computer vision and rotates a servo-mounted camera to keep the subject centered. Lights activate when the subject faces the camera.
+A face-tracking animatronic drink dispenser used for UBC FIZZ's 2026 ball model. When the door opens, the system performs a "quantum collapse" to determine ALIVE or DEAD state. If ALIVE and a person faces the camera, they can dispense a drink.
 
-## Features
+## Hardware Setup
 
-- Real-time face detection and pose estimation using MediaPipe
-- Automatic camera pan to follow subject
-- Light activation based on subject orientation
-- Operator dashboard for monitoring
-- Bidirectional UART communication between Pi and ESP32
-- Limit switch protection for servo bounds
+1. Plug both USB devices (camera and ESP32 cable) into your computer
+2. Connect the banana clips into a 5V power supply (max. current draw is about 1.5A)
+3. Ensure power supply is turned off when not in use
 
-## Hardware Requirements
+## Software Setup
 
-- Raspberry Pi (3B+ or newer recommended)
-- ESP32 development board
-- USB camera or Pi Camera
-- Servo motor (standard hobby servo)
-- Limit switch
-- LED lights (or relay-controlled lights)
+### ESP32 (if not already flashed)
 
-## Quick Start
-
-### Raspberry Pi Setup
-
-```bash
-cd rpi
-pip install -r requirements.txt
-python src/main.py
-```
-
-### ESP32 Setup
-
-Requires [PlatformIO](https://platformio.org/).
+I am using PlatformIO, so to open the project in vscode, select the esp32/ folder as the project folder. Alternatively, run the commands below:
 
 ```bash
 cd esp32
-pio run -t upload
+pio run              # Build
+pio run -t upload    # Upload to ESP32
 ```
 
-## Wiring
+### Computer
 
-### UART Connection
-| Raspberry Pi | ESP32 |
-|--------------|-------|
-| GPIO14 (TX)  | GPIO16 (RX) |
-| GPIO15 (RX)  | GPIO17 (TX) |
-| GND          | GND |
+```bash
+cd rpi
+python -m venv venv
+source venv/bin/activate  # Linux/Pi
+# or: venv\Scripts\activate  # Windows
+pip install -r requirements.txt
+```
 
-### ESP32 Peripherals
-| Component | GPIO Pin |
-|-----------|----------|
-| Servo PWM | 18 |
-| Light Output | 19 |
-| Limit Switch | 21 |
+## Running
+
+```bash
+cd rpi/src
+python main.py
+```
 
 ## Configuration
 
-- **Raspberry Pi**: Edit `rpi/src/config.py`
-- **ESP32**: Edit `esp32/include/config.h`
+All settings are in `rpi/src/config.py`. Key settings:
 
-## Documentation
+### Camera
 
-- [CLAUDE.md](CLAUDE.md) - Architecture and development guide
-- [project_status.md](project_status.md) - Development progress tracking
-- [protocol/uart_protocol.md](protocol/uart_protocol.md) - UART protocol specification
+```python
+CAMERA_INDEX = 1              # Camera device index
+CAMERA_WIDTH = 640
+CAMERA_HEIGHT = 480
+CAMERA_AUTO_EXPOSURE = False  # Set False for manual control
+CAMERA_EXPOSURE = -5          # Lower = darker (-10 to 0)
+```
 
-## License
+### Door Detection (Dark Frame)
 
-MIT
+```python
+DARK_THRESHOLD = 60           # Brightness threshold (0-255)
+DARK_PERCENTILE = 75          # Percentile for robustness to LED spots
+DARK_USE_VARIANCE = True      # Also check color uniformity
+DARK_VARIANCE_THRESHOLD = 50  # Std dev threshold
+DARK_TO_INACTIVE_DURATION = 1.0  # Seconds of dark before INACTIVE
+```
+
+### Face Detection
+
+```python
+FACING_YAW_THRESHOLD = 90.0   # Max yaw to be "facing" (degrees)
+FACING_PITCH_THRESHOLD = 20.0 # Max pitch to be "facing" (degrees)
+```
+
+### Dispensing
+
+```python
+POUR_DURATION = 2.0          # Valve open time (seconds)
+DISPENSE_HOLD_DURATION = 2.0  # Button hold time to dispense (seconds)
+```
+
+### Dashboard Controls
+
+| Key     | Action                              |
+| ------- | ----------------------------------- |
+| Q / ESC | Quit                                |
+| E       | Emergency stop (disable dispensing) |
+| D       | Enable dispensing                   |
+| V       | Open valve (manual)                 |
+| C       | Close valve                         |
+| I       | Force INACTIVE state                |
+| F       | Force COLLAPSE state                |
+| 1/2/3   | Set next outcome: Random/Alive/Dead |
+
+### UI Features
+
+- **Pour Time:** Click the text field to edit dispense duration
+- **Color Wheel:** Click to set RGB color
+- **Scroll:** Mouse wheel on telemetry panel
+
+## State Machine
+
+```
+INACTIVE (door closed)
+    |
+    v door opens (light detected)
+COLLAPSE (2s quantum animation)
+    |
+    |--50%--> ALIVE (can dispense)
+    |
+    +--50%--> DEAD (no dispense)
+    |
+    v door closes (dark detected)
+INACTIVE
+```
+
+### ALIVE Behavior
+
+- **Yellow-green:** Face detected but not facing camera
+- **Green:** Face detected AND facing camera (can dispense)
+- Hold limit switch while facing to dispense
+
+### DEAD Behavior
+
+- Static red display
+- No dispensing allowed
+
+## Tuning Tools
+
+### Brightness/Dark Detection
+
+```bash
+cd rpi/src
+python test_brightness.py
+```
+
+- Adjust thresholds with arrow keys
+- Press P to print config values
+- Press C to preview camera crop
+
+## Troubleshooting
+
+### Camera too bright/dark
+
+Set `CAMERA_AUTO_EXPOSURE = False` and adjust `CAMERA_EXPOSURE` (-10 to 0).
+
+### Face not detected
+
+- Check camera exposure
+- Ensure adequate lighting
+- Lower `FACE_DETECTION_CONFIDENCE` in config
+
+### Door state not detecting correctly
+
+Run `test_brightness.py` to tune `DARK_THRESHOLD` and `DARK_VARIANCE_THRESHOLD`.
