@@ -117,7 +117,7 @@ class StateMachineConfig:
     dispense_hold_duration: float = None  # How long to hold switch before dispense
 
     # Door detection thresholds
-    dark_to_inactive_duration: float = 2.0  # Seconds of darkness to enter INACTIVE
+    dark_to_inactive_duration: float = None  # Seconds of darkness to enter INACTIVE
     light_to_collapse_duration: float = 1.0  # Seconds of light to trigger COLLAPSE
 
     # Arm wave parameters
@@ -161,6 +161,9 @@ class StateMachineConfig:
         # Arm wave interval
         if self.arm_wave_interval is None:
             self.arm_wave_interval = getattr(config, 'ARM_WAVE_INTERVAL', 5.0)
+        # Door detection
+        if self.dark_to_inactive_duration is None:
+            self.dark_to_inactive_duration = getattr(config, 'DARK_TO_INACTIVE_DURATION', 2.0)
 
 
 class StateMachine:

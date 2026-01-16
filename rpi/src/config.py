@@ -139,10 +139,11 @@ CAMERA_CROP_BOTTOM = 0.0  # Crop from bottom edge
 #   - Door open typically has std dev ~30+
 #
 # Tuning: Use test_brightness.py to find optimal values for your setup
-DARK_THRESHOLD = 40  # 0-255 scale - raised from 15 to tolerate some internal LED light
+DARK_THRESHOLD = 60  # 0-255 scale - raised from 15 to tolerate some internal LED light
 DARK_PERCENTILE = 75  # Use 75th percentile (robust to bright LED spots)
 DARK_USE_VARIANCE = True  # Set True to also check color uniformity
-DARK_VARIANCE_THRESHOLD = 40  # Std dev below this = uniform (door closed)
+DARK_VARIANCE_THRESHOLD = 50  # Std dev below this = uniform (door closed)
+DARK_TO_INACTIVE_DURATION = 1.0  # Seconds of darkness before transitioning to INACTIVE
 
 # Platform-specific camera backend
 if IS_WINDOWS:
@@ -186,7 +187,7 @@ MIN_FACE_WIDTH_RATIO = 0.04
 # Facing Detection
 # -----------------------------------------------------------------------------
 FACING_YAW_THRESHOLD = 90.0  # degrees - subject considered facing if |yaw| < this
-FACING_PITCH_THRESHOLD = 15.0  # degrees
+FACING_PITCH_THRESHOLD = 25.0  # degrees
 
 # -----------------------------------------------------------------------------
 # Servo Control
@@ -209,8 +210,8 @@ TRACKING_MIN_WIDTH_RATIO = 0.06 # Min face width ratio to track (0.15 = 15% of f
 # -----------------------------------------------------------------------------
 # Dispensing / Pour Settings
 # -----------------------------------------------------------------------------
-POUR_DURATION = 10.0           # How long valve stays open when limit switch pressed (seconds)
-DISPENSE_FLASH_DURATION = 10.0 # How long aqua flash continues after dispense (seconds)
+POUR_DURATION = 2.0           # How long valve stays open when limit switch pressed (seconds)
+DISPENSE_FLASH_DURATION = 2.0 # How long aqua flash continues after dispense (seconds)
 REJECT_FLASH_DURATION = 1.0   # How long red flash on reject/repeat press (seconds)
 DISPENSE_HOLD_DURATION = 1.0  # How long limit switch must be held to start dispense (seconds)
 
